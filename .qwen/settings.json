@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir *)",
+      "Bash(copy *)",
+      "Bash(python *)",
+      "Bash(taskkill *)",
+      "Bash(tasklist)",
+      "Bash(findstr *)",
+      "Bash(netstat *)"
+    ]
+  },
+  "$version": 3
+}

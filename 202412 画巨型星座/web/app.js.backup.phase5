@@ -1,0 +1,1408 @@
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { DEG, RE_KM, RE_3D, SAT_SCALE, SAT_SCALE_CENTER, MAX_PAN_DISTANCE, WS_MAX_QUEUE_SIZE, sharedResources, THIRD_PERSON_CAMERA_POS, THIRD_PERSON_CAMERA_TARGET, FIRST_PERSON_CAMERA_POS, FIRST_PERSON_CAMERA_TARGET } from './modules/config.js';
+import { lerp, dateToJD, calcGMST, eciToEcef, ecefToLocal, normalize, cross, dot, parseTimestamp, formatTimestamp } from './modules/math-utils.js';
+import { createState } from './modules/state.js';
+import { updateEarthRotation as updateEarthRotationModule, latLonToSurface3D } from './modules/earth-rotation.js';
+import { initLocationControls as initLocationControlsModule } from './modules/ui/location-controls.js';
+import { initTooltip as initTooltipModule } from './modules/ui/tooltip-system.js';
+import { initStatsPanel as initStatsPanelModule, updateStatsPanel as updateStatsPanelModule } from './modules/ui/stats-panel.js';
+
+// 创建全局状态
+const appState = createState();
+
+// Three.js 核心对象
+let scene, camera, renderer, controls;
+
+// 当前视角和模式
+let currentView = appState.currentView;
+let currentMode = appState.currentMode;
+
+// 解包场景对象引用
+let { earth, earthGroup, groundStationMarker3D, orbitRings, satelliteMeshes3D,
+      horizonPlane, horizonRing, satelliteMeshes1D, groundStationMarker1D, gridGroup, arrowGroup,
+      centerSatMarker, satelliteMeshesCenter, earthRef } = appState.sceneObjects;
+
+// 解包纹理引用
+let { earthTextureLoaded, moonTextureLoaded } = appState.textures;
+
+// 解包 CSV 状态
+let { satelliteData, timeIndices } = appState.csv;
+let csvState = appState.csv.state;
+
+// 解包 WS 状态
+let wsState = appState.ws;
+
+// 解包交互状态
+let { currentLat, currentLon, isViewLocked, centerDragging, centerLastMouse, fpAzimuth, fpElevation, fpDragging, fpLastX, fpLastY } = appState.interaction;
+const cameraPanOffset = new THREE.Vector3(0, 0, 0);
+
+// 性能优化缓存
+let { transitionAnimId } = appState.cache;
+
+// 插值相关
+let { prevFrameData, currFrameData, currentInterpData, interpProgress, interpAnimId } = appState.interpolation;
+
+// 地球自转相关
+let earthRotationStartTime = appState.earthRotation.startTime;
+let earthRotationStartJD = appState.earthRotation.startJD;
+let earthRotationSpeedFactor = appState.earthRotation.speedFactor;
+
+// 向后兼容：共享资源别名
+const {
+    SAT_GEOM_3RD, SAT_MAT_3RD, SAT_GEOM_1ST, SAT_MAT_1ST, ORBIT_RING_MAT,
+    CENTER_SAT_GEOM, CENTER_SAT_MAT, DEPUTY_SAT_GEOM, DEPUTY_SAT_MAT,
+    EARTH_GEOM_3RD, EARTH_WIRE_MAT, GS_MARKER_GEOM, GS_MARKER_MAT,
+    MOON_GEOM, SKY_GEOM, SKY_MAT, HORIZON_PLANE_GEOM, HORIZON_PLANE_MAT,
+    HORIZON_RING_GEOM, HORIZON_RING_MAT, EARTH_CENTER_GEOM,
+    GS_MARKER_1ST_GEOM, GS_MARKER_1ST_MAT
+} = sharedResources;
+
+// ======================== 插值函数 ========================
+
+function interpolateSatellites(prevData, currData, progress) {
+    if (!prevData || !currData) return currData;
+    if (prevData.length === 0 || currData.length === 0) return currData;
+    
+    const interpolated = [];
+    for (let i = 0; i < currData.length; i++) {
+        const prev = prevData[i];
+        const curr = currData[i];
+        if (!prev) {
+            interpolated.push(curr);
+            continue;
+        }
+        const interpSat = [...curr];
+        // 插值位置
+        interpSat[8] = lerp(prev[8], curr[8], progress);
+        interpSat[9] = lerp(prev[9], curr[9], progress);
+        interpSat[10] = lerp(prev[10], curr[10], progress);
+        // 插值速度
+        interpSat[11] = lerp(prev[11], curr[11], progress);
+        interpSat[12] = lerp(prev[12], curr[12], progress);
+        interpSat[13] = lerp(prev[13], curr[13], progress);
+        interpolated.push(interpSat);
+    }
+    return interpolated;
+}
+
+function startInterpolation(duration = 1000) {
+    // 修复：取消之前的动画，防止多个循环叠加导致闪烁
+    if (interpAnimId) {
+        cancelAnimationFrame(interpAnimId);
+        interpAnimId = null;
+    }
+    
+    // 同步全局状态到 appState
+    appState.interpolation.prevFrameData = prevFrameData;
+    appState.interpolation.currFrameData = currFrameData;
+    
+    const startTime = performance.now();
+    function interpLoop(now) {
+        const elapsed = now - startTime;
+        interpProgress = Math.min(elapsed / duration, 1.0);
+        const interpData = interpolateSatellites(prevFrameData, currFrameData, interpProgress);
+        currentInterpData = interpData;
+        if (currentView === 'third') {
+            updateSatellitesThirdPersonInterp(interpData);
+        } else if (currentView === 'first') {
+            updateSatellitesFirstPersonInterp(interpData);
+        } else {
+            updateSatellitesCenterPersonInterp(interpData);
+        }
+        if (interpProgress < 1.0) {
+            interpAnimId = requestAnimationFrame(interpLoop);
+        } else {
+            interpAnimId = null;
+        }
+    }
+    interpAnimId = requestAnimationFrame(interpLoop);
+}
+
+function updateSatellitesThirdPersonInterp(interpData) {
+    if (!interpData || interpData.length === 0) return;
+    const gsPos = latLonToSurface3D(currentLat, currentLon);
+    // 地面站标记跟随地球自转（由 updateEarthRotation 统一处理）
+    if (groundStationMarker3D && earth) {
+        groundStationMarker3D.position.copy(groundStationMarker3D.position);
+    }
+    interpData.forEach((satData, idx) => {
+        if (idx >= satelliteMeshes3D.length) return;
+        satelliteMeshes3D[idx].visible = true;
+        satelliteMeshes3D[idx].position.set(satData[8] * SAT_SCALE, satData[10] * SAT_SCALE, -satData[9] * SAT_SCALE);
+    });
+    for (let i = interpData.length; i < satelliteMeshes3D.length; i++) satelliteMeshes3D[i].visible = false;
+    document.getElementById('coordDisplay').textContent = `纬度 ${currentLat.toFixed(1)}°  经度 ${currentLon.toFixed(1)}°  时间 ${formatTimestamp(interpData[0][0])}`;
+}
+
+function updateSatellitesFirstPersonInterp(interpData) {
+    if (!interpData || interpData.length === 0) return;
+    const d = parseTimestamp(interpData[0][0]);
+    const gmst = calcGMST(dateToJD(d.year, d.month, d.day, d.hour, d.minute, d.second));
+    let visibleCount = 0;
+    interpData.forEach((satData, idx) => {
+        if (idx >= satelliteMeshes1D.length) return;
+        const ecef = eciToEcef(satData[8], satData[9], satData[10], gmst);
+        const local = ecefToLocal(ecef.x, ecef.y, ecef.z, currentLat, currentLon);
+        satelliteMeshes1D[idx].visible = true;
+        if (local.el >= 0) { satelliteMeshes1D[idx].material.color.setHex(0x00ff00); visibleCount++; }
+        else satelliteMeshes1D[idx].material.color.setHex(0xff3333);
+        const displayDist = local.range;
+        const azR = local.az * DEG, elR = Math.max(local.el, -10) * DEG;
+        satelliteMeshes1D[idx].position.set(displayDist * Math.cos(elR) * Math.sin(azR), displayDist * Math.sin(elR), -displayDist * Math.cos(elR) * Math.cos(azR));
+    });
+    for (let i = interpData.length; i < satelliteMeshes1D.length; i++) satelliteMeshes1D[i].visible = false;
+    document.getElementById('visibleCount').textContent = visibleCount;
+}
+
+function updateSatellitesCenterPersonInterp(interpData) {
+    if (!interpData || interpData.length === 0) return;
+    const d = parseTimestamp(interpData[0][0]);
+    const gmst = calcGMST(dateToJD(d.year, d.month, d.day, d.hour, d.minute, d.second));
+    if (earthRef && earthRef.parent) { earthRef.position.set(0, 0, 0); earthRef.rotation.y = gmst; }
+    const centerSat = interpData[0];
+    const centerPos = { x: centerSat[8], y: centerSat[10], z: -centerSat[9] };
+    if (centerSatMarker) centerSatMarker.position.set(centerPos.x, centerPos.y, centerPos.z);
+    let visibleCount = 0;
+    const maxDeputyIdx = Math.min(interpData.length, satelliteMeshesCenter.length + 1);
+    for (let i = 1; i < maxDeputyIdx; i++) {
+        const dX = (interpData[i][8] - centerSat[8]) * SAT_SCALE_CENTER;
+        const dY = (interpData[i][9] - centerSat[9]) * SAT_SCALE_CENTER;
+        const dZ = (interpData[i][10] - centerSat[10]) * SAT_SCALE_CENTER;
+        satelliteMeshesCenter[i - 1].visible = true;
+        satelliteMeshesCenter[i - 1].position.set(centerPos.x + dX, centerPos.y + dZ, centerPos.z - dY);
+        if (dZ > -0.5) visibleCount++;
+    }
+    for (let i = maxDeputyIdx - 1; i < satelliteMeshesCenter.length; i++) satelliteMeshesCenter[i].visible = false;
+    
+    // 更新相机位置（跟随主星）
+    updateCenterPersonCamera();
+    
+    document.getElementById('coordDisplay').textContent = `纬度 ${currentLat.toFixed(1)}°  经度 ${currentLon.toFixed(1)}°  时间 ${formatTimestamp(interpData[0][0])}`;
+    document.getElementById('visibleCount').textContent = visibleCount;
+}
+
+// ======================== 工具函数 ========================
+function isWsMode() {
+    return currentMode === 'ws' && wsState.connection && wsState.connection.readyState === WebSocket.OPEN;
+}
+
+// (数学工具函数已从 modules/math-utils.js 导入)
+
+// ======================== 基础场景 ========================
+function initBaseScene() {
+    const container = document.getElementById('canvasContainer');
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x000011);
+    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 20000);
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    // FIX P2-7: Set pixel ratio for high DPI screens
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    container.appendChild(renderer.domElement);
+    scene.add(new THREE.AmbientLight(0x333344, 0.6));
+    const sun = new THREE.DirectionalLight(0xffffff, 1.2);
+    sun.position.set(100, 50, 100);
+    scene.add(sun);
+    controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+}
+
+function clearSceneObjects() {
+    const toRemove = [];
+    scene.traverse(child => {
+        if (child !== scene && child !== camera && !(child instanceof THREE.AmbientLight) && !(child instanceof THREE.DirectionalLight)) {
+            toRemove.push(child);
+        }
+    });
+    // Shared resources list to skip disposal
+    const sharedResources = new Set([
+        SAT_GEOM_3RD, SAT_MAT_3RD, SAT_GEOM_1ST, SAT_MAT_1ST, ORBIT_RING_MAT,
+        CENTER_SAT_GEOM, CENTER_SAT_MAT, DEPUTY_SAT_GEOM, DEPUTY_SAT_MAT,
+        EARTH_GEOM_3RD, EARTH_WIRE_MAT, GS_MARKER_GEOM, GS_MARKER_MAT,
+        MOON_GEOM, SKY_GEOM, SKY_MAT, HORIZON_PLANE_GEOM, HORIZON_PLANE_MAT,
+        HORIZON_RING_GEOM, HORIZON_RING_MAT, EARTH_CENTER_GEOM,
+        GS_MARKER_1ST_GEOM, GS_MARKER_1ST_MAT
+    ]);
+    toRemove.forEach(obj => {
+        if (obj.parent) obj.parent.remove(obj);
+        if (obj.geometry && !sharedResources.has(obj.geometry)) obj.geometry.dispose();
+        if (obj.material) {
+            const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
+            materials.forEach(m => { if (!sharedResources.has(m)) m.dispose(); });
+        }
+    });
+    // 清理全局数组引用
+    orbitRings = [];
+    satelliteMeshes3D = [];
+    satelliteMeshes1D = [];
+    satelliteMeshesCenter = [];
+}
+
+function addArrowTo(group, from, to, color) {
+    const dir = new THREE.Vector3().subVectors(to, from).normalize();
+    group.add(new THREE.ArrowHelper(dir, from, from.distanceTo(to), color, 20, 15));
+}
+
+// ======================== 第三视角 ========================
+function initThirdPersonScene() {
+    scene.background = new THREE.Color(0x000011);
+    clearSceneObjects();
+    earthGroup = new THREE.Group();
+    scene.add(earthGroup);
+    const earthMat = earthTextureLoaded ? new THREE.MeshPhongMaterial({ map: earthTextureLoaded, specular: 0x333333, shininess: 5 }) : new THREE.MeshPhongMaterial({ color: 0x2244aa, specular: 0x333333, shininess: 5 });
+    earth = new THREE.Mesh(EARTH_GEOM_3RD, earthMat);
+    // 修复：同步地球到状态对象
+    appState.sceneObjects.earth = earth;
+    earthGroup.add(earth);
+    earth.add(new THREE.LineSegments(new THREE.WireframeGeometry(EARTH_GEOM_3RD), EARTH_WIRE_MAT));
+    groundStationMarker3D = new THREE.Mesh(GS_MARKER_GEOM, GS_MARKER_MAT);
+    // 修复：同步地面站标记到状态对象
+    appState.sceneObjects.groundStationMarker3D = groundStationMarker3D;
+    earthGroup.add(groundStationMarker3D);
+    satelliteMeshes3D = [];
+    for (let i = 0; i < 22; i++) {
+        // FIX Bug 5: Store satellite index for correct tooltip data lookup
+        const mesh = new THREE.Mesh(SAT_GEOM_3RD, SAT_MAT_3RD);
+        mesh.userData.satIdx = i;
+        mesh.visible = false;
+        scene.add(mesh);
+        satelliteMeshes3D.push(mesh);
+    }
+    orbitRings = [];
+    if (satelliteData.length > 0) {
+        satelliteData[0].sats.forEach((sat) => {
+            const ring = createOrbitRing(sat.a, sat.e, sat.i * DEG, sat.OMG * DEG, sat.omg * DEG);
+            ring.visible = true;
+            scene.add(ring);
+            orbitRings.push(ring);
+        });
+    }
+    const moon = new THREE.Mesh(MOON_GEOM, moonTextureLoaded ? new THREE.MeshPhongMaterial({ map: moonTextureLoaded }) : new THREE.MeshPhongMaterial({ color: 0xcccccc }));
+    moon.position.set(RE_3D * 4.5, RE_3D * 0.5, -RE_3D * 4.5);
+    scene.add(moon);
+    // 相机位置由 switchView 的 animateTransition 控制，不在此设置
+    controls.autoRotate = false;
+    controls.autoRotateSpeed = 0.5;
+    controls.enableRotate = true;
+    controls.enablePan = true;
+    controls.enableZoom = true;
+    controls.minDistance = RE_3D * 1.2;
+    controls.maxDistance = RE_3D * 5;
+    controls.enabled = true;
+    document.getElementById('groundInfo').classList.remove('hidden');
+    document.getElementById('info').querySelector('span').parentElement.parentElement.style.display = 'none';
+    if (isWsMode() && wsState.lastStepData) {
+        // 初始化地球自转基准JD
+        const d = parseTimestamp(wsState.lastStepData[0][0]);
+        earthRotationStartJD = dateToJD(d.year, d.month, d.day, d.hour, d.minute, d.second);
+        updateSatellitesThirdPersonWs(wsState.lastStepData);
+    }
+    else if (satelliteData.length > 0) updateSatellitesThirdPerson(csvState.currentTimeIdx);
+}
+
+function createOrbitRing(a, e, i, OMG, omg) {
+    const points = [];
+    const cosO = Math.cos(OMG), sinO = Math.sin(OMG);
+    const cosI = Math.cos(i), sinI = Math.sin(i);
+    const cosW = Math.cos(omg), sinW = Math.sin(omg);
+    for (let f = 0; f <= 360; f++) {
+        const fRad = f * DEG;
+        const p = a * (1 - e * e);
+        const r = p / (1 + e * Math.cos(fRad));
+        const x_orb = r * Math.cos(fRad);
+        const y_orb = r * Math.sin(fRad);
+        const x = (cosO * cosW - sinO * sinW * cosI) * x_orb + (-cosO * sinW - sinO * cosW * cosI) * y_orb;
+        const y = (sinO * cosW + cosO * sinW * cosI) * x_orb + (-sinO * sinW + cosO * cosW * cosI) * y_orb;
+        const z = (sinW * sinI) * x_orb + (cosW * sinI) * y_orb;
+        points.push(new THREE.Vector3(x * SAT_SCALE, z * SAT_SCALE, -y * SAT_SCALE));
+    }
+    return new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), ORBIT_RING_MAT);
+}
+
+function updateSatellitesThirdPerson(timeIdx) {
+    const data = appState.csv.satelliteData;
+    if (timeIdx < 0 || timeIdx >= data.length) return;
+    const group = data[timeIdx];
+    document.getElementById('coordDisplay').textContent = `纬度 ${currentLat.toFixed(1)}°  经度 ${currentLon.toFixed(1)}°  时间 ${formatTimestamp(group.timestamp)}`;
+    group.sats.forEach((sat, idx) => {
+        if (idx >= satelliteMeshes3D.length) return;
+        satelliteMeshes3D[idx].visible = true;
+        satelliteMeshes3D[idx].position.set(sat.X * SAT_SCALE, sat.Z * SAT_SCALE, -sat.Y * SAT_SCALE);
+    });
+    for (let i = data.sats.length; i < satelliteMeshes3D.length; i++) satelliteMeshes3D[i].visible = false;
+}
+
+// ======================== 第一视角 ========================
+function initFirstPersonScene() {
+    scene.background = new THREE.Color(0x0a0a1a);
+    clearSceneObjects();
+    scene.add(new THREE.Mesh(SKY_GEOM, SKY_MAT));
+    horizonPlane = new THREE.Mesh(HORIZON_PLANE_GEOM, HORIZON_PLANE_MAT);
+    horizonPlane.rotation.x = -Math.PI / 2;
+    scene.add(horizonPlane);
+    horizonRing = new THREE.Mesh(HORIZON_RING_GEOM, HORIZON_RING_MAT);
+    horizonRing.rotation.x = -Math.PI / 2;
+    scene.add(horizonRing);
+    gridGroup = new THREE.Group();
+    const gridMat = new THREE.LineBasicMaterial({ color: 0x333366, transparent: true, opacity: 0.3 });
+    [30, 60, 90].forEach(el => {
+        const r = 2000 * Math.cos(el * DEG), y = 2000 * Math.sin(el * DEG);
+        const pts = new THREE.EllipseCurve(0, 0, r, r, 0, 2 * Math.PI, false, 0).getPoints(64);
+        gridGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts.map(p => new THREE.Vector3(p.x, y, p.y))), gridMat));
+    });
+    for (let az = 0; az < 360; az += 30) {
+        const azR = az * DEG, pts = [];
+        for (let el = 0; el <= 90; el += 5) {
+            const r = 2000 * Math.cos(el * DEG), y = 2000 * Math.sin(el * DEG);
+            pts.push(new THREE.Vector3(r * Math.sin(azR), y, -r * Math.cos(azR)));
+        }
+        gridGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), gridMat));
+    }
+    scene.add(gridGroup);
+    arrowGroup = new THREE.Group();
+    addArrowTo(arrowGroup, new THREE.Vector3(0, 0, -100), new THREE.Vector3(0, 0, -250), 0xff0000);
+    addArrowTo(arrowGroup, new THREE.Vector3(100, 0, 0), new THREE.Vector3(250, 0, 0), 0x00ff00);
+    addArrowTo(arrowGroup, new THREE.Vector3(0, 100, 0), new THREE.Vector3(0, 250, 0), 0x0066ff);
+    scene.add(arrowGroup);
+    groundStationMarker1D = new THREE.Mesh(GS_MARKER_1ST_GEOM, GS_MARKER_1ST_MAT);
+    groundStationMarker1D.position.set(0, 0, 0);
+    scene.add(groundStationMarker1D);
+    satelliteMeshes1D = [];
+    for (let i = 0; i < 22; i++) {
+        const mesh = new THREE.Mesh(SAT_GEOM_1ST, SAT_MAT_1ST);
+        mesh.userData.satIdx = i;
+        mesh.visible = false;
+        scene.add(mesh);
+        satelliteMeshes1D.push(mesh);
+    }
+    // 第一视角不调用 updateFirstPersonCamera()，由过渡动画完成后调用
+    // 注意：此函数只在 initFirstPersonScene 中调用，所以始终不调用 updateFirstPersonCamera
+    controls.enabled = false;
+    document.getElementById('groundInfo').classList.add('hidden');
+    document.getElementById('info').querySelector('span').parentElement.parentElement.style.display = '';
+    if (isWsMode() && wsState.lastStepData) {
+        const d = parseTimestamp(wsState.lastStepData[0][0]);
+        earthRotationStartJD = dateToJD(d.year, d.month, d.day, d.hour, d.minute, d.second);
+        updateSatellitesFirstPersonWs(wsState.lastStepData);
+    }
+    else if (satelliteData.length > 0) updateSatellitesFirstPerson(csvState.currentTimeIdx);
+}
+
+function updateFirstPersonCamera() {
+    camera.position.set(0, 0, 0);
+    const elRad = fpElevation * DEG;
+    camera.lookAt(new THREE.Vector3(Math.cos(elRad) * Math.sin(fpAzimuth), Math.sin(elRad), Math.cos(elRad) * Math.cos(fpAzimuth)));
+}
+
+function updateSatellitesFirstPerson(timeIdx) {
+    const data = appState.csv.satelliteData;
+    if (timeIdx < 0 || timeIdx >= data.length) return;
+    const group = data[timeIdx];
+    const d = parseTimestamp(group.timestamp);
+    const gmst = calcGMST(dateToJD(d.year, d.month, d.day, d.hour, d.minute, d.second));
+    let visibleCount = 0;
+    group.sats.forEach((sat, idx) => {
+        if (idx >= satelliteMeshes1D.length) return;
+        const ecef = eciToEcef(sat.X, sat.Y, sat.Z, gmst);
+        const local = ecefToLocal(ecef.x, ecef.y, ecef.z, currentLat, currentLon);
+        satelliteMeshes1D[idx].visible = true;
+        if (local.el >= 0) { satelliteMeshes1D[idx].material.color.setHex(0x00ff00); visibleCount++; }
+        else satelliteMeshes1D[idx].material.color.setHex(0xff3333);
+        const displayDist = local.range;
+        const azR = local.az * DEG, elR = Math.max(local.el, -10) * DEG;
+        satelliteMeshes1D[idx].position.set(displayDist * Math.cos(elR) * Math.sin(azR), displayDist * Math.sin(elR), -displayDist * Math.cos(elR) * Math.cos(azR));
+    });
+    for (let i = data.sats.length; i < satelliteMeshes1D.length; i++) satelliteMeshes1D[i].visible = false;
+    document.getElementById('visibleCount').textContent = visibleCount;
+    document.getElementById('timeDisplay').textContent = formatTimestamp(data.timestamp);
+}
+
+// ======================== 主星视角 ========================
+function initCenterPersonScene() {
+    scene.background = new THREE.Color(0x000022);
+    clearSceneObjects();
+    const earthMat = earthTextureLoaded ? new THREE.MeshPhongMaterial({ map: earthTextureLoaded, specular: 0x333333, shininess: 5 }) : new THREE.MeshPhongMaterial({ color: 0x2244aa, specular: 0x333333, shininess: 5 });
+    earthRef = new THREE.Mesh(EARTH_CENTER_GEOM, earthMat);
+    earthRef.position.set(0, 0, 0);
+    // 修复：同步 earthRef 到状态对象
+    appState.sceneObjects.earthRef = earthRef;
+    scene.add(earthRef);
+    centerSatMarker = new THREE.Mesh(CENTER_SAT_GEOM, CENTER_SAT_MAT);
+    scene.add(centerSatMarker);
+    satelliteMeshesCenter = [];
+    for (let i = 0; i < 21; i++) {
+        const mesh = new THREE.Mesh(DEPUTY_SAT_GEOM, DEPUTY_SAT_MAT);
+        mesh.userData.satIdx = i + 1;  // Deputy satellites are indexed 1-21
+        mesh.visible = false;
+        scene.add(mesh);
+        satelliteMeshesCenter.push(mesh);
+    }
+    // 相机位置由 switchView 的 animateTransition 控制，不在此设置
+    controls.autoRotate = false;
+    controls.enabled = false;  // 主星视角禁用 OrbitControls
+    controls.enableRotate = false;
+    controls.enablePan = false;
+    controls.enableZoom = false;
+    controls.minDistance = 6870;
+    controls.maxDistance = 6900;
+    document.getElementById('lockViewGroup').style.display = 'block';
+    updateLockButton();
+    document.getElementById('groundInfo').classList.remove('hidden');
+    document.getElementById('info').querySelector('span').parentElement.parentElement.style.display = 'none';
+    if (isWsMode() && wsState.lastStepData) {
+        const d = parseTimestamp(wsState.lastStepData[0][0]);
+        earthRotationStartJD = dateToJD(d.year, d.month, d.day, d.hour, d.minute, d.second);
+        updateSatellitesCenterPersonWs(wsState.lastStepData);
+    }
+    else if (satelliteData.length > 0) updateSatellitesCenterPerson(csvState.currentTimeIdx);
+}
+
+function updateSatellitesCenterPerson(timeIdx) {
+    const data = appState.csv.satelliteData;
+    if (timeIdx < 0 || timeIdx >= data.length) return;
+    const group = data[timeIdx];
+    const centerSat = group.sats[0];
+    const d = parseTimestamp(group.timestamp);
+    const gmst = calcGMST(dateToJD(d.year, d.month, d.day, d.hour, d.minute, d.second));
+    if (earthRef) { earthRef.position.set(0, 0, 0); earthRef.rotation.y = gmst; }
+    const centerPos = { x: centerSat.X * SAT_SCALE_CENTER, y: centerSat.Z * SAT_SCALE_CENTER, z: -centerSat.Y * SAT_SCALE_CENTER };
+    if (centerSatMarker) centerSatMarker.position.set(centerPos.x, centerPos.y, centerPos.z);
+    for (let i = 1; i < data.sats.length; i++) {
+        const dX = (data.sats[i].X - centerSat.X) * SAT_SCALE_CENTER;
+        const dY = (data.sats[i].Y - centerSat.Y) * SAT_SCALE_CENTER;
+        const dZ = (data.sats[i].Z - centerSat.Z) * SAT_SCALE_CENTER;
+        satelliteMeshesCenter[i - 1].visible = true;
+        satelliteMeshesCenter[i - 1].position.set(centerPos.x + dX, centerPos.y + dZ, centerPos.z - dY);
+    }
+    for (let i = data.sats.length - 1; i < satelliteMeshesCenter.length; i++) satelliteMeshesCenter[i].visible = false;
+    document.getElementById('coordDisplay').textContent = `纬度 ${currentLat.toFixed(1)}°  经度 ${currentLon.toFixed(1)}°  时间 ${formatTimestamp(data.timestamp)}`;
+    document.getElementById('visibleCount').textContent = data.sats.length;
+    document.getElementById('timeDisplay').textContent = formatTimestamp(data.timestamp);
+    // 更新相机位置（跟随主星）
+    updateCenterPersonCamera();
+}
+
+// ======================== 视角切换 ========================
+function switchView(view) {
+    if (view === currentView) return;
+    
+    // 保存当前相机位置（在场景初始化前）
+    const savedCameraPos = camera.position.clone();
+    const savedControlsTarget = controls.target.clone();
+    
+    // FIX P2-9: Update currentView before animation starts for consistent interaction state
+    currentView = view;
+    centerDragging = false;
+    cameraPanOffset.set(0, 0, 0);
+    // FIX Bug 1.3: Don't reset fpAzimuth/fpElevation on view switch to preserve user's custom view
+    const btn3rd = document.getElementById('thirdViewBtn');
+    const btn1st = document.getElementById('firstViewBtn');
+    const btnCenter = document.getElementById('centerViewBtn');
+    let targetPos, targetLook;
+    if (view === 'third') {
+        targetPos = THIRD_PERSON_CAMERA_POS.clone();
+        targetLook = THIRD_PERSON_CAMERA_TARGET.clone();
+        btn3rd.classList.add('active');
+        btn1st.classList.remove('active');
+        btnCenter.classList.remove('active');
+        document.getElementById('lockViewGroup').style.display = 'none';
+    } else if (view === 'first') {
+        targetPos = FIRST_PERSON_CAMERA_POS.clone();
+        targetLook = FIRST_PERSON_CAMERA_TARGET.clone();
+        btn1st.classList.add('active');
+        btn3rd.classList.remove('active');
+        btnCenter.classList.remove('active');
+        document.getElementById('lockViewGroup').style.display = 'none';
+    } else {
+        if (isWsMode() && wsState.lastStepData) {
+            const centerSat = wsState.lastStepData[0];
+            const cp = { x: centerSat[8], y: centerSat[10], z: -centerSat[9] };
+            const dc = Math.sqrt(cp.x ** 2 + cp.y ** 2 + cp.z ** 2);
+            // FIX: Prevent NaN from causing freeze
+            if (dc === 0 || !isFinite(dc)) {
+                targetPos = new THREE.Vector3(6900, 100, 0);
+            } else {
+                const rd = new THREE.Vector3(cp.x / dc, cp.y / dc, cp.z / dc);
+                targetPos = new THREE.Vector3(cp.x + rd.x * 10, cp.y + rd.y * 10, cp.z + rd.z * 10);
+            }
+        } else {
+            const centerSat = appState.csv.satelliteData[csvState.currentTimeIdx]?.sats[0];
+            if (centerSat) {
+                const cp = { x: centerSat.X, y: centerSat.Z, z: -centerSat.Y };
+                const dc = Math.sqrt(cp.x ** 2 + cp.y ** 2 + cp.z ** 2);
+                // FIX: Prevent NaN from causing freeze
+                if (dc === 0 || !isFinite(dc)) {
+                    targetPos = new THREE.Vector3(6900, 100, 0);
+                } else {
+                    const rd = new THREE.Vector3(cp.x / dc, cp.y / dc, cp.z / dc);
+                    targetPos = new THREE.Vector3(cp.x + rd.x * 10, cp.y + rd.y * 10, cp.z + rd.z * 10);
+                }
+            } else {
+                targetPos = new THREE.Vector3(6900, 100, 0);
+            }
+        }
+        targetLook = new THREE.Vector3(0, 0, 0);
+        btnCenter.classList.add('active');
+        btn3rd.classList.remove('active');
+        btn1st.classList.remove('active');
+        document.getElementById('lockViewGroup').style.display = 'block';
+        // updateLockButton() is called in initCenterPersonScene() after scene objects are created
+    }
+    
+    // 先初始化场景
+    if (view === 'third') initThirdPersonScene();
+    else if (view === 'first') initFirstPersonScene();
+    else initCenterPersonScene();
+    
+    // 然后执行过渡动画（使用保存的起始位置）
+    animateTransitionFrom(targetPos, targetLook, view, 1000, () => {}, savedCameraPos, savedControlsTarget);
+}
+
+function animateTransitionFrom(targetPos, targetLookAt, targetView, duration, onComplete, startPos, startTarget) {
+    // FIX: Cancel previous animation to prevent conflicts
+    if (transitionAnimId) {
+        cancelAnimationFrame(transitionAnimId);
+        transitionAnimId = null;
+    }
+    
+    // 直接设置目标点，避免视角跳变
+    controls.target.copy(targetLookAt);
+    
+    const startTime = performance.now();
+    function step(now) {
+        const t = Math.min((now - startTime) / duration, 1);
+        const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+        camera.position.lerpVectors(startPos, targetPos, ease);
+        if (targetView === 'third') {
+            controls.update();
+        }
+        if (t < 1) {
+            transitionAnimId = requestAnimationFrame(step);
+        } else {
+            transitionAnimId = null;
+            if (onComplete) onComplete();
+        }
+    }
+    transitionAnimId = requestAnimationFrame(step);
+}
+
+// ======================== 轨道环更新 ========================
+function updateOrbitRings() {
+    // 移除旧轨道环
+    orbitRings.forEach(ring => {
+        if (ring.parent) ring.parent.remove(ring);
+        if (ring.geometry) ring.geometry.dispose();
+    });
+    orbitRings = [];
+    
+    // 创建新轨道环
+    if (satelliteData.length > 0 && satelliteData[0].sats.length > 0) {
+        satelliteData[0].sats.forEach((sat) => {
+            const ring = createOrbitRing(sat.a, sat.e, sat.i * DEG, sat.OMG * DEG, sat.omg * DEG);
+            ring.visible = true;
+            scene.add(ring);
+            orbitRings.push(ring);
+        });
+    }
+}
+
+// ======================== CSV 模式 ========================
+async function loadCSV() {
+    try {
+        const response = await fetch('/Output/propagation_result.csv');
+        if (!response.ok) {
+            console.log('propagation_result.csv 不存在，请使用文件选择器加载 CSV 文件');
+            return;
+        }
+        const text = await response.text();
+        const lines = text.trim().split('\n');
+        const grouped = {};
+        for (let i = 1; i < lines.length; i++) {
+            const vals = lines[i].split(',');
+            if (vals.length < 14) continue;
+            const ts = vals[0];
+            const satId = parseInt(vals[1]);
+            if (isNaN(satId)) continue;
+            const sat = { sat_id: satId, a: parseFloat(vals[2]), e: parseFloat(vals[3]), i: parseFloat(vals[4]), OMG: parseFloat(vals[5]), omg: parseFloat(vals[6]), f: parseFloat(vals[7]), X: parseFloat(vals[8]), Y: parseFloat(vals[9]), Z: parseFloat(vals[10]), Vx: parseFloat(vals[11]), Vy: parseFloat(vals[12]), Vz: parseFloat(vals[13]) };
+            if (!grouped[ts]) grouped[ts] = [];
+            grouped[ts].push(sat);
+        }
+        timeIndices = Object.keys(grouped).sort();
+        satelliteData = timeIndices.map(ts => ({ timestamp: ts, sats: grouped[ts] }));
+        csvState.endIdx = timeIndices.length - 1;
+        console.log(`CSV加载完成: ${satelliteData.length} 个时间点, ${satelliteData[0]?.sats.length || 0} 颗卫星`);
+    } catch (e) {
+        console.log('propagation_result.csv 加载失败，请使用文件选择器加载 CSV 文件');
+    }
+}
+
+function startCsvPlayback() {
+    // 修复：从 appState 获取最新数据引用（解决加载 CSV 后局部变量未更新的问题）
+    const data = appState.csv.satelliteData;
+    const state = appState.csv.state;
+    const times = appState.csv.timeIndices;
+
+    if (state.isPlaying) return;
+    if (!data || data.length === 0) {
+        console.error("无可用卫星数据，请先加载 CSV 文件");
+        return;
+    }
+    state.isPlaying = true;
+
+    // Reset interpolation state to prevent stale data from other modes
+    prevFrameData = null;
+    currFrameData = null;
+    currentInterpData = null;
+
+    const speed = parseInt(document.getElementById('speed').value, 10);
+    const intervalMs = Math.max(100 / speed, 16);
+
+    // 计算CSV帧时间间隔（秒）
+    let frameIntervalSec = 60;  // 默认1分钟
+    if (times.length >= 2) {
+        const d1 = parseTimestamp(times[0]);
+        const d2 = parseTimestamp(times[1]);
+        const jd1 = dateToJD(d1.year, d1.month, d1.day, d1.hour, d1.minute, d1.second);
+        const jd2 = dateToJD(d2.year, d2.month, d2.day, d2.hour, d2.minute, d2.second);
+        frameIntervalSec = Math.abs((jd2 - jd1) * 86400);
+    }
+
+    // 速度因子 = 每秒播放帧数 * 每帧间隔秒数
+    const framesPerSec = 1000 / intervalMs;
+    earthRotationSpeedFactor = appState.earthRotation.speedFactor = framesPerSec * frameIntervalSec;
+
+    // 重置地球自转基准时间
+    earthRotationStartTime = appState.earthRotation.startTime = performance.now();
+    const groupData = data[state.currentTimeIdx];
+    if (groupData) {
+        const d = parseTimestamp(groupData.timestamp);
+        earthRotationStartJD = appState.earthRotation.startJD = dateToJD(d.year, d.month, d.day, d.hour, d.minute, d.second);
+    }
+
+    csvState.interval = setInterval(() => {
+        if (state.currentTimeIdx >= state.endIdx) {
+            state.currentTimeIdx = state.startIdx;
+        } else {
+            state.currentTimeIdx++;
+        }
+        document.getElementById('timeSlider').value = state.currentTimeIdx;
+
+        // Get timestamp from group level (not individual satellite objects)
+        const currentGroup = data[state.currentTimeIdx];
+        if (!currentGroup) return;
+        const timestamp = currentGroup.timestamp;
+        const frameData = currentGroup.sats.map(sat => [
+            timestamp, sat.sat_id, sat.a, sat.e, sat.i, sat.OMG, sat.omg, sat.f,
+            sat.X, sat.Y, sat.Z, sat.Vx, sat.Vy, sat.Vz
+        ]);
+        prevFrameData = currFrameData;
+        currFrameData = frameData;
+        startInterpolation(intervalMs);
+
+        // 只更新时间进度条（不重复更新卫星位置，由插值动画处理）
+        const progress = timeIndices.length > 1 
+            ? (csvState.currentTimeIdx / (timeIndices.length - 1)) * 100 
+            : 0;
+        const bar = document.getElementById('time-bar');
+        if (bar) bar.style.width = progress + '%';
+    }, intervalMs);
+}
+
+function stopCsvPlayback() {
+    csvState.isPlaying = false;
+    if (csvState.interval) { clearInterval(csvState.interval); csvState.interval = null; }
+}
+
+function updateCurrentView() {
+    if (currentMode === 'ws') {
+        // WS 模式：调用 WS 模式的视角更新
+        if (wsState.lastStepData) {
+            updateCurrentViewWs();
+        }
+        const bar = document.getElementById('time-bar');
+        if (bar) bar.style.width = '0%';
+        return;
+    }
+    // CSV mode: earth rotation is handled by updateEarthRotation() in animate loop
+    if (currentView === 'third') updateSatellitesThirdPerson(csvState.currentTimeIdx);
+    else if (currentView === 'first') updateSatellitesFirstPerson(csvState.currentTimeIdx);
+    else updateSatellitesCenterPerson(csvState.currentTimeIdx);
+    const times = appState.csv.timeIndices;
+    const progress = times.length > 1 ? (csvState.currentTimeIdx / (times.length - 1)) * 100 : 0;
+    const bar = document.getElementById('time-bar');
+    if (bar) bar.style.width = progress + '%';
+    if (!document.getElementById('stats-panel').classList.contains('hidden')) updateStatsPanelModule(appState);
+}
+
+// WS 模式下的视角切换处理
+function updateCurrentViewWs() {
+    if (!wsState.lastStepData) return;
+    if (currentView === 'third') {
+        updateSatellitesThirdPersonWs(wsState.lastStepData);
+    } else if (currentView === 'first') {
+        updateSatellitesFirstPersonWs(wsState.lastStepData);
+    } else {
+        updateSatellitesCenterPersonWs(wsState.lastStepData);
+    }
+}
+
+// ======================== WebSocket 模式 ========================
+function connectWebSocket(autoPlay = false) {
+    if (wsState.connection && wsState.connection.readyState !== WebSocket.CLOSED) return;
+    wsState.dataQueue = [];
+    wsState.currentTime = 0;
+    wsState.playbackActive = false;
+    wsState.lastStepData = null;
+    wsState.autoPlayOnConnect = autoPlay;
+    wsState.connectionState = 'connecting';
+    updateWsStatus();
+    wsState.connection = new WebSocket('ws://localhost:8765');
+    wsState.connection.onopen = () => {
+        wsState.connectionState = 'buffering';
+        currentMode = 'ws';
+        // FIX P2-8: Hide CSV UI elements in WS mode
+        document.getElementById('startIdx').parentElement.style.display = 'none';
+        document.getElementById('endIdx').parentElement.style.display = 'none';
+        document.getElementById('timeSlider').parentElement.style.display = 'none';
+        const barContainer = document.getElementById('time-bar-container');
+        if (barContainer) barContainer.style.display = 'none';
+        // Update mode toggle button text
+        const modeBtn = document.getElementById('modeToggle');
+        if (modeBtn) modeBtn.textContent = '🔄 切换到 CSV 模式';
+        updateWsStatus();
+        
+        // 初始化地球自转基准时间
+        earthRotationStartTime = performance.now();
+        
+        // 添加过渡动画
+        animateTransitionFrom(
+            THIRD_PERSON_CAMERA_POS.clone(),
+            THIRD_PERSON_CAMERA_TARGET.clone(),
+            'third',
+            1000,
+            () => {},
+            camera.position.clone(),
+            controls.target.clone()
+        );
+    };
+    wsState.connection.onmessage = (event) => {
+        // FIX Bug 2 & 7: Add JSON parse error handling
+        let msg;
+        try {
+            msg = JSON.parse(event.data);
+        } catch (e) {
+            console.error('WS 数据解析失败:', e);
+            return;
+        }
+        if (msg.type === 'data' && Array.isArray(msg.data) && msg.data.length > 0) {
+            // FIX Bug 2: Validate data structure
+            const isValid = msg.data.every(d => Array.isArray(d) && d.length >= 14);
+            if (!isValid) {
+                console.warn('WS 数据格式错误，跳过本批次');
+                return;
+            }
+            // FIX P0-2: Use loop instead of spread to prevent stack overflow
+            for (let i = 0; i < msg.data.length; i++) {
+                wsState.dataQueue.push(msg.data[i]);
+            }
+            // FIX Bug 5: Keep newest data when queue overflows
+            while (wsState.dataQueue.length > WS_MAX_QUEUE_SIZE) {
+                wsState.dataQueue.shift();
+            }
+            // FIX: Don't set lastStepData here - it's set in runWsPlayback when consuming data
+            // This ensures lastStepData always reflects the currently playing frame
+            if (msg.is_first && !wsState.playbackActive && wsState.autoPlayOnConnect) {
+                wsState.connectionState = 'playing';
+                wsState.autoPlayOnConnect = false;
+                runWsPlayback();
+            }
+            // FIX Bug 3: Restart timer if playback was active but timer stopped due to empty queue
+            if (wsState.playbackActive && !wsState.playbackTimer) {
+                runWsPlayback();
+            }
+            updateWsStatus();
+        }
+    };
+    wsState.connection.onclose = () => {
+        wsState.connectionState = 'disconnected';
+        currentMode = 'csv';
+        wsState.playbackActive = false;
+        wsState.connection = null;
+        stopWsPlayback();
+        if (csvState.isPlaying) stopCsvPlayback();
+        // FIX Bug 9: Restore all CSV UI elements
+        document.getElementById('startIdx').parentElement.style.display = '';
+        document.getElementById('endIdx').parentElement.style.display = '';
+        document.getElementById('timeSlider').parentElement.style.display = '';
+        const barContainer = document.getElementById('time-bar-container');
+        if (barContainer) barContainer.style.display = '';
+        updateWsStatus();
+        
+        // 添加过渡动画
+        animateTransitionFrom(
+            THIRD_PERSON_CAMERA_POS.clone(),
+            THIRD_PERSON_CAMERA_TARGET.clone(),
+            'third',
+            1000,
+            () => {},
+            camera.position.clone(),
+            controls.target.clone()
+        );
+    };
+    wsState.connection.onerror = () => {
+        wsState.connectionState = 'disconnected';
+        updateWsStatus();
+        // FIX: Delay cleanup to avoid conflict with onclose
+        setTimeout(() => {
+            if (wsState.connection && wsState.connection.readyState === WebSocket.CLOSED) {
+                wsState.connection = null;
+            }
+            if (!wsState.connection) {
+                connectWebSocket(wsState.autoPlayOnConnect);
+            }
+        }, 3000);
+    };
+}
+
+function runWsPlayback() {
+    if (wsState.playbackActive) return;
+    wsState.playbackActive = true;
+
+    // Reset interpolation state to prevent stale data from other modes
+    prevFrameData = null;
+    currFrameData = null;
+    currentInterpData = null;
+
+    // WS模式：地球自转与时间戳1:1同步
+    // 重置状态，确保在收到第一条数据时能正确初始化
+    earthRotationSpeedFactor = appState.earthRotation.speedFactor = 1;
+    earthRotationStartTime = appState.earthRotation.startTime = null;
+    earthRotationStartJD = appState.earthRotation.startJD = null;
+    
+    function tick() {
+        if (!wsState.playbackActive) return;
+        if (wsState.dataQueue.length === 0) {
+            wsState.playbackTimer = setTimeout(tick, 100);
+            return;
+        }
+        const stepData = wsState.dataQueue.shift();
+        prevFrameData = currFrameData;
+        currFrameData = stepData;
+        wsState.lastStepData = stepData;
+        
+        // 初始化地球自转基准时间
+        if (earthRotationStartTime === null && stepData && stepData.length > 0) {
+            earthRotationStartTime = appState.earthRotation.startTime = performance.now();
+            const d = parseTimestamp(stepData[0][0]);
+            earthRotationStartJD = appState.earthRotation.startJD = dateToJD(d.year, d.month, d.day, d.hour, d.minute, d.second);
+        }
+        
+        startInterpolation();
+        if (stepData && stepData.length > 0) {
+            document.getElementById('timeDisplay').textContent = formatTimestamp(stepData[0][0]);
+        }
+        wsState.playbackTimer = setTimeout(tick, 1000);
+    }
+    tick();
+}
+
+function stopWsPlayback() {
+    wsState.playbackActive = false;
+    // FIX Bug 5: Clear both setTimeout and setInterval timers
+    if (wsState.playbackTimer) { 
+        clearTimeout(wsState.playbackTimer); 
+        clearInterval(wsState.playbackTimer); 
+        wsState.playbackTimer = null; 
+    }
+}
+
+function sendWsCommand(cmd) {
+    if (wsState.connection && wsState.connection.readyState === WebSocket.OPEN) {
+        wsState.connection.send(JSON.stringify({ type: 'command', cmd }));
+    }
+}
+
+function updateSatellitesThirdPersonWs(stepData) {
+    // 地面站标记位置由 updateEarthRotation 统一处理，此处不再更新
+    stepData.forEach((satData, idx) => {
+        if (idx >= satelliteMeshes3D.length) return;
+        satelliteMeshes3D[idx].visible = true;
+        satelliteMeshes3D[idx].position.set(satData[8] * SAT_SCALE, satData[10] * SAT_SCALE, -satData[9] * SAT_SCALE);
+    });
+    for (let i = stepData.length; i < satelliteMeshes3D.length; i++) satelliteMeshes3D[i].visible = false;
+    document.getElementById('coordDisplay').textContent = `纬度 ${currentLat.toFixed(1)}°  经度 ${currentLon.toFixed(1)}°  时间 ${formatTimestamp(stepData[0][0])}`;
+}
+
+function updateSatellitesFirstPersonWs(stepData) {
+    const d = parseTimestamp(stepData[0][0]);
+    const gmst = calcGMST(dateToJD(d.year, d.month, d.day, d.hour, d.minute, d.second));
+    let visibleCount = 0;
+    stepData.forEach((satData, idx) => {
+        if (idx >= satelliteMeshes1D.length) return;
+        const ecef = eciToEcef(satData[8], satData[9], satData[10], gmst);
+        const local = ecefToLocal(ecef.x, ecef.y, ecef.z, currentLat, currentLon);
+        satelliteMeshes1D[idx].visible = true;
+        if (local.el >= 0) { satelliteMeshes1D[idx].material.color.setHex(0x00ff00); visibleCount++; }
+        else satelliteMeshes1D[idx].material.color.setHex(0xff3333);
+        const displayDist = local.range;
+        const azR = local.az * DEG, elR = Math.max(local.el, -10) * DEG;
+        satelliteMeshes1D[idx].position.set(displayDist * Math.cos(elR) * Math.sin(azR), displayDist * Math.sin(elR), -displayDist * Math.cos(elR) * Math.cos(azR));
+    });
+    for (let i = stepData.length; i < satelliteMeshes1D.length; i++) satelliteMeshes1D[i].visible = false;
+    document.getElementById('visibleCount').textContent = visibleCount;
+}
+
+function updateSatellitesCenterPersonWs(stepData) {
+    // 地球自转由 animate 循环中的 updateEarthRotation 统一处理
+    const centerSat = stepData[0];
+    const centerPos = { x: centerSat[8], y: centerSat[10], z: -centerSat[9] };
+    if (centerSatMarker) centerSatMarker.position.set(centerPos.x, centerPos.y, centerPos.z);
+    let visibleCount = 0;
+    for (let i = 1; i < stepData.length; i++) {
+        const dX = (stepData[i][8] - centerSat[8]) * SAT_SCALE_CENTER;
+        const dY = (stepData[i][9] - centerSat[9]) * SAT_SCALE_CENTER;
+        const dZ = (stepData[i][10] - centerSat[10]) * SAT_SCALE_CENTER;
+        satelliteMeshesCenter[i - 1].visible = true;
+        satelliteMeshesCenter[i - 1].position.set(centerPos.x + dX, centerPos.y + dZ, centerPos.z - dY);
+        if (dZ > -0.5) visibleCount++;
+    }
+    for (let i = stepData.length - 1; i < satelliteMeshesCenter.length; i++) satelliteMeshesCenter[i].visible = false;
+    document.getElementById('coordDisplay').textContent = `纬度 ${currentLat.toFixed(1)}°  经度 ${currentLon.toFixed(1)}°  时间 ${formatTimestamp(stepData[0][0])}`;
+    document.getElementById('visibleCount').textContent = visibleCount;
+    // 更新相机位置（跟随主星）
+    updateCenterPersonCamera();
+}
+
+function updateWsStatus() {
+    const statusDot = document.getElementById('ws-status-dot');
+    const statusText = document.getElementById('ws-status-text');
+    if (!statusDot || !statusText) return;
+    statusDot.className = 'dot ' + wsState.connectionState;
+    const texts = { disconnected: '未连接', connecting: '连接中...', buffering: '计算中...', playing: '实时播放', paused: '已暂停' };
+    statusText.textContent = texts[wsState.connectionState] || '未知';
+}
+
+// ======================== 播放控制 ========================
+function startPlay() {
+    // 如果 WS 已连接并正在播放，不启动任何播放
+    if (wsState.connection && wsState.connection.readyState === WebSocket.OPEN && wsState.playbackActive) {
+        return;
+    }
+    // 停止所有可能的播放
+    stopWsPlayback();
+    if (csvState.isPlaying) stopCsvPlayback();
+    
+    // 如果 WS 正在连接中，等待连接完成
+    if (wsState.connection && wsState.connection.readyState === WebSocket.CONNECTING) {
+        wsState.autoPlayOnConnect = true;
+        updateWsStatus();
+        return;
+    }
+    
+    if (currentMode === 'ws') {
+        if (wsState.connection && wsState.connection.readyState === WebSocket.OPEN) {
+            sendWsCommand('resume');
+            wsState.connectionState = 'playing';
+            runWsPlayback();
+            updateWsStatus();
+            return;
+        }
+        // 重连
+        wsState.dataQueue = [];
+        wsState.currentTime = 0;
+        wsState.playbackActive = false;
+        wsState.connection = null;
+        wsState.autoPlayOnConnect = true;
+        connectWebSocket(true);
+        return;
+    }
+    startCsvPlayback();
+}
+
+function stopPlay() {
+    stopWsPlayback();
+    if (csvState.isPlaying) stopCsvPlayback();
+    
+    // 重置地球自转状态，停止后地球不再自转
+    earthRotationStartTime = appState.earthRotation.startTime = null;
+    earthRotationStartJD = appState.earthRotation.startJD = null;
+    earthRotationSpeedFactor = appState.earthRotation.speedFactor = 1;
+    
+    // FIX Bug 3: Update UI state when stopping
+    const slider = document.getElementById('timeSlider');
+    if (slider && currentMode === 'csv') slider.value = csvState.currentTimeIdx;
+    const playBtn = document.getElementById('playBtn');
+    if (playBtn) playBtn.textContent = '▶ 播放';
+    
+    if (currentMode === 'ws' && wsState.connection && wsState.connection.readyState === WebSocket.OPEN) {
+        sendWsCommand('pause');
+        wsState.connectionState = 'paused';
+        updateWsStatus();
+    }
+}
+
+// ======================== UI 控制 ========================
+function initTimeControls() {
+    const startSelect = document.getElementById('startIdx');
+    const endSelect = document.getElementById('endIdx');
+    const slider = document.getElementById('timeSlider');
+    startSelect.innerHTML = '';
+    endSelect.innerHTML = '';
+    appState.csv.timeIndices.forEach((ts, idx) => {
+        const opt1 = document.createElement('option');
+        opt1.value = idx;
+        opt1.textContent = formatTimestamp(ts);
+        startSelect.appendChild(opt1);
+        const opt2 = document.createElement('option');
+        opt2.value = idx;
+        opt2.textContent = formatTimestamp(ts);
+        endSelect.appendChild(opt2);
+    });
+    endSelect.value = appState.csv.timeIndices.length - 1;
+    csvState.startIdx = 0;
+    csvState.endIdx = appState.csv.timeIndices.length - 1;
+    startSelect.addEventListener('change', () => {
+        csvState.startIdx = parseInt(startSelect.value);
+        if (csvState.currentTimeIdx < csvState.startIdx) { csvState.currentTimeIdx = csvState.startIdx; slider.value = csvState.currentTimeIdx; updateCurrentView(); }
+    });
+    endSelect.addEventListener('change', () => {
+        csvState.endIdx = parseInt(endSelect.value);
+        if (csvState.currentTimeIdx > csvState.endIdx) { csvState.currentTimeIdx = csvState.endIdx; slider.value = csvState.currentTimeIdx; updateCurrentView(); }
+    });
+    slider.max = Math.max(0, appState.csv.timeIndices.length - 1);
+    slider.addEventListener('input', () => { csvState.currentTimeIdx = parseInt(slider.value); updateCurrentView(); });
+    document.getElementById('playBtn').addEventListener('click', startPlay);
+    document.getElementById('stopBtn').addEventListener('click', stopPlay);
+    document.getElementById('speed').addEventListener('change', () => {
+        if (csvState.isPlaying) { stopCsvPlayback(); startCsvPlayback(); }
+        else if (currentMode === 'ws') {
+            // WS 模式下速度切换提示
+            console.log('WS 模式下速度由服务器控制，前端切换无效');
+        }
+    });
+}
+
+function initModeToggle() {
+    const btn = document.getElementById('modeToggle');
+    btn.addEventListener('click', () => {
+        if (currentMode === 'ws') {
+            currentMode = 'csv';
+            stopWsPlayback();
+            if (wsState.connection && wsState.connection.readyState === WebSocket.OPEN) {
+                wsState.connection.close();
+            }
+            wsState.connection = null;
+            document.getElementById('startIdx').parentElement.style.display = '';
+            document.getElementById('endIdx').parentElement.style.display = '';
+            document.getElementById('timeSlider').parentElement.style.display = '';
+            document.getElementById('time-bar-container').style.display = '';
+            btn.textContent = '🔄 切换到 WS 模式';
+            updateWsStatus();
+        } else {
+            connectWebSocket(true);
+            btn.textContent = '🔄 切换到 CSV 模式';
+        }
+    });
+}
+
+function initViewControls() {
+    document.getElementById('thirdViewBtn').addEventListener('click', () => switchView('third'));
+    document.getElementById('firstViewBtn').addEventListener('click', () => switchView('first'));
+    document.getElementById('centerViewBtn').addEventListener('click', () => switchView('center'));
+}
+
+function updateLockButton() {
+    const btn = document.getElementById('lockViewBtn');
+    if (isViewLocked) {
+        btn.textContent = '🔒 锁定视角';
+        btn.classList.add('active');
+        if (currentView === 'center') {
+            resetCameraPanOffset();
+            if (isWsMode() && wsState.lastStepData) {
+                updateSatellitesCenterPersonWs(wsState.lastStepData);
+            } else if (satelliteData.length > 0) {
+                updateCurrentView();
+            }
+        }
+    } else {
+        btn.textContent = '🔓 解锁视角';
+        btn.classList.remove('active');
+    }
+}
+
+function initCenterPersonMouse() {
+    renderer.domElement.addEventListener('mousedown', (e) => {
+        if (currentView !== 'center' || isViewLocked || e.button !== 0) return;
+        centerDragging = true;
+        centerLastMouse = { x: e.clientX, y: e.clientY };
+    });
+    renderer.domElement.addEventListener('mousemove', (e) => {
+        if (!centerDragging || currentView !== 'center' || isViewLocked) return;
+        const dx = e.clientX - centerLastMouse.x;
+        const dy = e.clientY - centerLastMouse.y;
+        const viewDir = new THREE.Vector3().subVectors(new THREE.Vector3(0,0,0), camera.position).normalize();
+        const up = new THREE.Vector3(0, 1, 0);
+        const right = new THREE.Vector3().crossVectors(viewDir, up).normalize();
+        const panSpeed = 0.02;
+        cameraPanOffset.add(right.clone().multiplyScalar(-dx * panSpeed));
+        cameraPanOffset.add(up.clone().multiplyScalar(dy * panSpeed));
+        centerLastMouse = { x: e.clientX, y: e.clientY };
+        // 限制偏移，不直接更新相机（由插值循环统一更新）
+        if (cameraPanOffset.length() > MAX_PAN_DISTANCE) {
+            cameraPanOffset.setLength(MAX_PAN_DISTANCE);
+        }
+    });
+    renderer.domElement.addEventListener('mouseup', () => { centerDragging = false; });
+    renderer.domElement.addEventListener('mouseleave', () => { centerDragging = false; });
+}
+
+function updateCenterPersonCamera() {
+    if (currentView !== 'center') return;
+    let centerPos;
+    
+    // 优先使用插值数据（与主星标记位置一致）
+    if (currentInterpData && currentInterpData.length > 0) {
+        const cs = currentInterpData[0];
+        centerPos = { x: cs[8], y: cs[10], z: -cs[9] };
+    } else if (isWsMode() && wsState.lastStepData && wsState.lastStepData.length > 0) {
+        const cs = wsState.lastStepData[0];
+        centerPos = { x: cs[8], y: cs[10], z: -cs[9] };
+    } else if (appState.csv.satelliteData.length > 0) {
+        const cs = appState.csv.satelliteData[csvState.currentTimeIdx]?.sats[0];
+        if (!cs) return;
+        centerPos = { x: cs.X, y: cs.Z, z: -cs.Y };
+    } else {
+        return;
+    }
+    
+    // 计算地心-主星连线的归一化方向（径向）
+    const distToCenter = Math.sqrt(centerPos.x ** 2 + centerPos.y ** 2 + centerPos.z ** 2);
+    if (distToCenter === 0) return;
+    const radialDir = { 
+        x: centerPos.x / distToCenter, 
+        y: centerPos.y / distToCenter, 
+        z: centerPos.z / distToCenter 
+    };
+    
+    if (cameraPanOffset.length() > MAX_PAN_DISTANCE) {
+        cameraPanOffset.setLength(MAX_PAN_DISTANCE);
+    }
+    
+    // 相机位于径向外侧10单位
+    const basePos = new THREE.Vector3(
+        centerPos.x + radialDir.x * 10,
+        centerPos.y + radialDir.y * 10,
+        centerPos.z + radialDir.z * 10
+    );
+    camera.position.copy(basePos).add(cameraPanOffset);
+    camera.lookAt(0, 0, 0);
+}
+
+function resetCameraPanOffset() {
+    cameraPanOffset.set(0, 0, 0);
+    updateCenterPersonCamera();
+}
+
+function initLockView() {
+    document.getElementById('lockViewBtn').addEventListener('click', () => { isViewLocked = !isViewLocked; updateLockButton(); });
+}
+
+function initFirstPersonControls() {
+    renderer.domElement.addEventListener('mousedown', (e) => {
+        if (currentView !== 'first') return;
+        fpDragging = true;
+        fpLastX = e.clientX;
+        fpLastY = e.clientY;
+    });
+    renderer.domElement.addEventListener('mousemove', (e) => {
+        if (!fpDragging || currentView !== 'first') return;
+        fpAzimuth -= (e.clientX - fpLastX) * 0.003;
+        fpElevation = Math.max(1, Math.min(90, fpElevation + (e.clientY - fpLastY) * 0.1));
+        fpLastX = e.clientX;
+        fpLastY = e.clientY;
+        updateFirstPersonCamera();
+    });
+    renderer.domElement.addEventListener('mouseup', () => { fpDragging = false; });
+    renderer.domElement.addEventListener('mouseleave', () => { fpDragging = false; });
+}
+
+// ======================== Tooltip ========================
+// ======================== 键盘快捷键 ========================
+function initKeyboardControls() {
+    document.addEventListener('keydown', (e) => {
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+        switch(e.key) {
+            case ' ': e.preventDefault(); isPlaying() ? stopPlay() : startPlay(); break;
+            case '1': switchView('third'); break;
+            case '2': switchView('first'); break;
+            case '3': switchView('center'); break;
+            case 'ArrowLeft':
+                if (isWsMode()) return;
+                e.preventDefault();
+                csvState.currentTimeIdx = Math.max(csvState.startIdx, csvState.currentTimeIdx - 1);
+                document.getElementById('timeSlider').value = csvState.currentTimeIdx;
+                updateCurrentView();
+                break;
+            case 'ArrowRight':
+                if (isWsMode()) return;
+                e.preventDefault();
+                csvState.currentTimeIdx = Math.min(csvState.endIdx, csvState.currentTimeIdx + 1);
+                document.getElementById('timeSlider').value = csvState.currentTimeIdx;
+                updateCurrentView();
+                break;
+        }
+    });
+}
+
+function isPlaying() {
+    return wsState.playbackActive || csvState.isPlaying;
+}
+
+// ======================== 文件选择器 ========================
+function initFileLoader() {
+    document.getElementById('csvFileInput').addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        try {
+            const text = await file.text();
+            const lines = text.trim().split('\n');
+            const grouped = {};
+            for (let i = 1; i < lines.length; i++) {
+                const vals = lines[i].split(',');
+                if (vals.length < 14) continue;
+                const ts = vals[0];
+                const satId = parseInt(vals[1]);
+                if (isNaN(satId)) continue;
+                const sat = { sat_id: satId, a: parseFloat(vals[2]), e: parseFloat(vals[3]), i: parseFloat(vals[4]), OMG: parseFloat(vals[5]), omg: parseFloat(vals[6]), f: parseFloat(vals[7]), X: parseFloat(vals[8]), Y: parseFloat(vals[9]), Z: parseFloat(vals[10]), Vx: parseFloat(vals[11]), Vy: parseFloat(vals[12]), Vz: parseFloat(vals[13]) };
+                if (!grouped[ts]) grouped[ts] = [];
+                grouped[ts].push(sat);
+            }
+            appState.csv.timeIndices = Object.keys(grouped).sort();
+            appState.csv.satelliteData = appState.csv.timeIndices.map(ts => ({ timestamp: ts, sats: grouped[ts] }));
+            csvState.endIdx = appState.csv.timeIndices.length - 1;
+            csvState.startIdx = 0;
+            csvState.currentTimeIdx = 0;
+            document.getElementById('totalSatCount').textContent = appState.csv.satelliteData[0]?.sats.length || 0;
+            initTimeControls();
+            updateOrbitRings();
+            updateCurrentView();
+            alert(`加载成功: ${appState.csv.satelliteData.length} 个时间点, ${appState.csv.satelliteData[0]?.sats.length || 0} 颗卫星`);
+        } catch (err) {
+            alert('CSV解析失败: ' + err.message);
+        }
+    });
+}
+
+// ======================== 地球自转连续插值 ========================
+
+function animate() {
+    requestAnimationFrame(animate);
+    if (currentView === 'third') {
+        controls.update();
+    }
+    // 主星视角每帧更新相机跟随
+    if (currentView === 'center') {
+        updateCenterPersonCamera();
+    }
+
+    // 确保 appState.sceneObjects 是最新的
+    if (earth && !appState.sceneObjects.earth) {
+        appState.sceneObjects.earth = earth;
+    }
+    if (earthRef && !appState.sceneObjects.earthRef) {
+        appState.sceneObjects.earthRef = earthRef;
+    }
+
+    // --- 临时调试日志：追踪地球自转状态 ---
+    if (appState.earthRotation.startTime === null || appState.earthRotation.startJD === null) {
+        console.warn('地球自转未初始化: startTime=', appState.earthRotation.startTime, 'startJD=', appState.earthRotation.startJD);
+    }
+    // 如果满足条件，打印一帧以确认更新逻辑被触发
+    if (Math.floor(performance.now() / 1000) % 2 === 0) { // 每 2 秒打印一次，避免刷屏
+        console.log('Earth Rotation Check:', { 
+            hasEarth: !!appState.sceneObjects.earth, 
+            hasEarthRef: !!appState.sceneObjects.earthRef,
+            startTime: appState.earthRotation.startTime,
+            startJD: appState.earthRotation.startJD
+        });
+    }
+    // ----------------------------------------
+
+    // 每帧更新地球自转（连续插值）
+    updateEarthRotationModule(appState, appState.sceneObjects);
+    renderer.render(scene, camera);
+}
+
+// ======================== 初始化 ========================
+async function init() {
+    try {
+        const loader = new THREE.TextureLoader();
+        
+        // 等待纹理加载完成，避免地球从蓝色跳变到纹理
+        await new Promise((resolve) => {
+            let loadedCount = 0;
+            const checkDone = () => { if (++loadedCount >= 2) resolve(); };
+            
+            loader.load('https://unpkg.com/three-globe@2.31.1/example/img/earth-blue-marble.jpg', 
+                (texture) => { earthTextureLoaded = texture; checkDone(); },
+                undefined, 
+                () => { console.warn('地球纹理加载失败'); checkDone(); }
+            );
+            loader.load('https://upload.wikimedia.org/wikipedia/commons/thumb/e/e1/FullMoon2010.jpg/1200px-FullMoon2010.jpg', 
+                (texture) => { moonTextureLoaded = texture; checkDone(); },
+                undefined, 
+                () => { console.warn('月球纹理加载失败'); checkDone(); }
+            );
+        });
+        
+        initBaseScene();
+        initFirstPersonControls();
+        initCenterPersonMouse();
+        initLocationControlsModule(appState, {
+            onLocationChange: (state) => {
+                // 同步全局变量
+                currentLat = state.interaction.currentLat;
+                currentLon = state.interaction.currentLon;
+
+                updateCurrentView();
+
+                // 手动更新地面站标记
+                if (groundStationMarker3D && earth) {
+                    const gmst = earth.rotation.y;
+                    const gsPos = latLonToSurface3D(currentLat, currentLon);
+                    gsPos.applyAxisAngle(new THREE.Vector3(0, 1, 0), gmst);
+                    groundStationMarker3D.position.copy(gsPos);
+                }
+            }
+        });
+        initViewControls();
+        initLockView();
+        initTooltipModule(appState.sceneObjects, camera, renderer, appState);
+        initKeyboardControls();
+        initFileLoader();
+        initStatsPanelModule(() => updateStatsPanelModule(appState));
+        initTimeControls();
+        initModeToggle();
+        initThirdPersonScene();
+        
+        // 设置初始相机位置
+        camera.position.copy(THIRD_PERSON_CAMERA_POS);
+        controls.target.copy(THIRD_PERSON_CAMERA_TARGET);
+        controls.update();
+        
+        connectWebSocket(true);
+        animate();
+    } catch (e) {
+        console.error('初始化失败:', e);
+        alert('初始化失败: ' + e.message);
+    }
+}
+
+init();
