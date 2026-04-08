@@ -392,6 +392,8 @@ function switchView(view) {
         // CSV 模式下立即渲染当前帧
         if (currentMode === 'csv') {
             updateFirstPersonMod(csvState.currentTimeIdx, appState);
+            // 强制渲染，解决切换后需要鼠标拖动的问题
+            renderer.render(scene, camera);
         }
     } 
     else { // Center
@@ -403,6 +405,8 @@ function switchView(view) {
         if (currentMode === 'csv') {
             // 确保先渲染卫星，相机位置会在 updateCenterPersonMod 中自动计算
             updateCenterPersonMod(csvState.currentTimeIdx, appState, camera, cameraPanOffset);
+            // 强制渲染，解决切换后需要点击播放的问题
+            renderer.render(scene, camera);
         } else if (wsState.lastStepData) {
             // WS 模式下也需要渲染
             updateCenterPersonWsMod(wsState.lastStepData, appState, camera, cameraPanOffset);
