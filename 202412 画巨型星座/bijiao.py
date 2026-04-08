@@ -20,6 +20,7 @@ def read_csv_to_sate(file_path):
 
     return data.values  # 将DataFrame转换为NumPy数组
 
+
 if __name__ == "__main__":
     file_path = '1星轨道根数.csv'
     data = read_csv_to_sate(file_path)*1000
