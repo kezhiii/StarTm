@@ -414,10 +414,32 @@ function switchView(view) {
     }
 
     // 6. 强制渲染 (解决切换不显示问题)
-    // 更新相机矩阵确保渲染正确
+    // 确保相机完全更新
+    if (view === 'first') {
+        updateFirstPersonCameraMod(camera, appState);
+    }
+    
     camera.updateMatrix();
     camera.updateMatrixWorld(true);
-    renderer.render(scene, camera);
+    
+    // 使用多层 requestAnimationFrame 确保在下几个动画帧中正确渲染
+    requestAnimationFrame(() => {
+        // 再次确保相机和场景状态更新
+        if (view === 'first') {
+            updateFirstPersonCameraMod(camera, appState);
+        }
+        camera.updateMatrix();
+        camera.updateMatrixWorld(true);
+        renderer.render(scene, camera);
+        
+        requestAnimationFrame(() => {
+            renderer.render(scene, camera);
+            
+            requestAnimationFrame(() => {
+                renderer.render(scene, camera);
+            });
+        });
+    });
 }
 
 function animateTransitionFrom(targetPos, targetLookAt, targetView, duration, onComplete, startPos, startTarget) {
