@@ -550,8 +550,23 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
             updateWsSts(wsState);
             onDisconnected?.();
 
-            // 修复：移除自动重连逻辑，防止用户在切换到 CSV 模式时 WS 再次自动连接
-            // setTimeout(() => { if (!wsState.connection) connectWebSocket(wsState.autoPlayOnConnect, onConnected, onDisconnected); }, 3000);
+            // 自动重连：仅在 WS 模式且未达到最大重试次数时
+            if (appState.currentMode === 'ws' && wsState.autoPlayOnConnect) {
+                if (!wsState._reconnectAttempts) wsState._reconnectAttempts = 0;
+                if (wsState._reconnectAttempts < 3) {
+                    wsState._reconnectAttempts++;
+                    const delay = 1500 * wsState._reconnectAttempts; // 递增延迟：1.5s, 3s, 4.5s
+                    DBG.warn(`WS 连接失败，${delay/1000}s 后自动重连 (${wsState._reconnectAttempts}/3)...`);
+                    setTimeout(() => {
+                        if (appState.currentMode === 'ws' && !wsState.connection) {
+                            connectWebSocket(true, onConnected, onDisconnected);
+                        }
+                    }, delay);
+                } else {
+                    DBG.error('WS 自动重连失败（已达最大尝试次数），请手动刷新页面');
+                    wsState._reconnectAttempts = 0;
+                }
+            }
         };
 
         wsState.connection.onerror = () => {
