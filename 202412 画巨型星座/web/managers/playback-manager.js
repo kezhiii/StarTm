@@ -322,8 +322,15 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
         interpState.currFrameData = null;
         interpState.currentInterpData = null;
         earthRotationState.speedFactor = 1;
-        earthRotationState.startTime = null;
-        earthRotationState.startJD = null;
+
+        // 关键修复：在播放启动时设置一次地球自转参数，而不是在循环中重复设置
+        // 防止在播放过程中如果 startTime 被清空(如视角切换)导致基准时间不断重置
+        if (wsState.lastStepData?.length > 0) {
+            earthRotationState.startTime = performance.now();
+            const d = parseTimestamp(wsState.lastStepData[0][0]);
+            earthRotationState.startJD = dateToJD(d.year, d.month, d.day, d.hour, d.minute, d.second);
+            DBG.log(`WS 地球自转参数初始化: startJD=${earthRotationState.startJD.toFixed(4)}`);
+        }
 
         let lastFrameTime = performance.now();
         let accumulator = 0;
@@ -340,24 +347,20 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
             if (accumulator >= wsIntervalMs && wsState.dataQueue.length > 0) {
                 accumulator -= wsIntervalMs;
                 const stepData = wsState.dataQueue.shift();
-                
+
                 // 关键诊断：记录帧切换信息
                 if (interpState.currFrameData && stepData) {
                     const prevTime = interpState.currFrameData[0]?.[0] || '?';
                     const currTime = stepData[0]?.[0] || '?';
                     DBG.log(`帧切换: ${prevTime} → ${currTime}`);
                 }
-                
+
                 interpState.prevFrameData = interpState.currFrameData;
                 interpState.currFrameData = stepData;
                 wsState.lastStepData = stepData;
 
-                if (earthRotationState.startTime === null && stepData?.length > 0) {
-                    earthRotationState.startTime = performance.now();
-                    const d = parseTimestamp(stepData[0][0]);
-                    earthRotationState.startJD = dateToJD(d.year, d.month, d.day, d.hour, d.minute, d.second);
-                    DBG.log(`WS 地球自转参数初始化: startJD=${earthRotationState.startJD.toFixed(4)}`);
-                }
+                // 移除：不要在循环中重复设置地球自转参数
+                // if (earthRotationState.startTime === null && stepData?.length > 0) { ... }
 
                 if (stepData?.length > 0) {
                     document.getElementById('timeDisplay').textContent = formatTimestamp(stepData[0][0]);

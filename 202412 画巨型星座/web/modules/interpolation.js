@@ -8,8 +8,9 @@ import { SAT_SCALE, SAT_SCALE_CENTER, DEG, RE_KM, RE_3D } from './config.js';
 export function interpolateSatellites(prevData, currData, progress) {
     if (!prevData || !currData) return currData;
     if (prevData.length === 0 || currData.length === 0) return currData;
-    
-    // 关键修复：保护progress范围，防止异常值
+
+    // 关键修复：确保 progress 是有效数字，防止 undefined 导致 NaN 传播
+    progress = (typeof progress === 'number' && isFinite(progress)) ? progress : 0;
     progress = Math.min(Math.max(progress, 0), 1.0);
 
     const interpolated = [];

@@ -139,23 +139,29 @@ export function createLightManager(getSceneObjectsFn) {
                 if (satIdx === 0) console.warn('[LIGHT] sceneObjects is null');
                 return;
             }
-            
+
             // 尝试所有可能的卫星网格数组（注意：空数组 [] 是 truthy，必须检查 length）
             const meshes = sceneObjects.satelliteMeshes3D?.length ? sceneObjects.satelliteMeshes3D :
                           (sceneObjects.satelliteMeshes1D?.length ? sceneObjects.satelliteMeshes1D :
                           sceneObjects.satelliteMeshesCenter);
-            
+
             if (!meshes) {
                 if (satIdx === 0) console.warn('[LIGHT] 找不到卫星网格数组');
                 return;
             }
-            
+
             if (!meshes[satIdx]) {
-                if (satIdx === 0) console.warn(`[LIGHT] 卫星 0 不存在 (数组长度: ${meshes.length})`);
+                if (satIdx === 0) console.warn(`[LIGHT] 卫星 ${satIdx} 不存在 (数组长度: ${meshes.length})`);
                 return;
             }
 
             const mesh = meshes[satIdx];
+            
+            // 关键修复：检查网格是否仍然有效，防止视角切换时操作已销毁的网格
+            if (!mesh.material || mesh.material.disposed || !mesh.parent) {
+                return;
+            }
+            
             const isVisible = mesh.visible;
             
             // 调试日志：第一次调用时打印详细信息
