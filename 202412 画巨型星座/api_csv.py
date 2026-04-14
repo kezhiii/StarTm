@@ -202,9 +202,6 @@ class CsvApiHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         params = parse_qs(parsed.query)
         
-        # 添加 CORS 头（前端从 8000 端口访问 API 8080 端口）
-        self._add_cors_headers()
-        
         if parsed.path == '/api/csv-data':
             self._handle_csv_data(params)
         elif parsed.path == '/api/csv-info':
@@ -216,8 +213,8 @@ class CsvApiHandler(BaseHTTPRequestHandler):
     
     def do_OPTIONS(self):
         """处理 CORS 预检请求"""
-        self._add_cors_headers()
         self.send_response(200)
+        self._add_cors_headers()
         self.end_headers()
     
     def _add_cors_headers(self):
@@ -356,6 +353,14 @@ class CsvApiHandler(BaseHTTPRequestHandler):
         print(f'[CSV-API] {args[0]}')
 
 
+# 使用多线程 HTTP 服务器提高并发性能
+from socketserver import ThreadingMixIn
+
+class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
+
 def start_csv_api(csv_path=None, port=API_PORT):
     """启动 CSV API 服务"""
     if csv_path is None:
@@ -371,7 +376,7 @@ def start_csv_api(csv_path=None, port=API_PORT):
     # 预加载 CSV
     preload_csv(csv_path)
     
-    server = HTTPServer(('0.0.0.0', port), CsvApiHandler)
+    server = ThreadingHTTPServer(('0.0.0.0', port), CsvApiHandler)
     print(f'[CSV-API] HTTP 服务启动: http://localhost:{port}')
     print(f'[CSV-API] API 端点:')
     print(f'[CSV-API]   GET /api/csv-info   - 查看元信息')
