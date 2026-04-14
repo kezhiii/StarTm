@@ -384,6 +384,26 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
             if (accumulator > maxAccumulator) {
                 accumulator = maxAccumulator;
             }
+
+            // 关键修复：队列为空时打印警告并跳过插值，防止progress卡在1.0
+            // 原因：后端暂停/计算中时队列空，accumulator持续增长导致progress=1.0
+            if (wsState.dataQueue.length === 0 && accumulator >= wsIntervalMs) {
+                // 只在首次检测到时打印警告
+                if (!wsState._queueEmptyWarned) {
+                    DBG.warn('WS 数据队列空，等待后端数据...（后端可能正在计算或暂停）');
+                    wsState._queueEmptyWarned = true;
+                }
+                wsState.playbackAnimId = requestAnimationFrame(playbackLoop);
+                return;
+            }
+            
+            // 队列恢复时清除警告标记
+            if (wsState.dataQueue.length > 0 && wsState._queueEmptyWarned) {
+                DBG.log('WS 数据队列恢复，继续播放');
+                wsState._queueEmptyWarned = false;
+                // 重置accumulator避免progress突变
+                accumulator = 0;
+            }
             
             // 修复：不要清理积压数据，让播放循环正常消费
             // 如果队列过大（>100帧），保留最新100帧
@@ -494,6 +514,12 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
                     }
                 }
 
+                // 关键修复：后端恢复数据时清除队列空警告标记
+                if (wsState._queueEmptyWarned) {
+                    DBG.log('WS 数据队列恢复，继续播放');
+                    wsState._queueEmptyWarned = false;
+                }
+
                 // 关键修复：只在首次连接时启动播放，防止重复调用
                 if (msg.is_first && !wsState.playbackActive && wsState.autoPlayOnConnect) {
                     wsState.connectionState = 'playing';
@@ -503,6 +529,16 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
                 }
                 // 移除：不要重复调用runWsPlayback，播放循环已经在运行
                 // if (wsState.playbackActive && !wsState.playbackTimer) runWsPlayback();
+                updateWsSts(wsState);
+            } else if (msg.type === 'command' && msg.cmd === 'paused') {
+                // 处理后端发送的暂停命令
+                DBG.warn('后端已暂停播放');
+                wsState.connectionState = 'paused';
+                updateWsSts(wsState);
+            } else if (msg.type === 'command' && msg.cmd === 'buffering') {
+                // 处理后端发送的计算中命令
+                DBG.warn('后端正在计算数据...');
+                wsState.connectionState = 'buffering';
                 updateWsSts(wsState);
             }
         };
