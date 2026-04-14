@@ -33,12 +33,17 @@ export function createModeManager(appState, viewManager, playbackHandlers) {
         wsState.connection = null;
 
         // 恢复 CSV UI
-        document.getElementById('startIdx').parentElement.style.display = '';
-        document.getElementById('endIdx').parentElement.style.display = '';
-        document.getElementById('timeSlider').parentElement.style.display = '';
+        const startIdxEl = document.getElementById('startIdx');
+        const endIdxEl = document.getElementById('endIdx');
+        const timeSliderEl = document.getElementById('timeSlider');
         const bar = document.getElementById('time-bar-container');
+        const modeToggleEl = document.getElementById('modeToggle');
+        
+        if (startIdxEl?.parentElement) startIdxEl.parentElement.style.display = '';
+        if (endIdxEl?.parentElement) endIdxEl.parentElement.style.display = '';
+        if (timeSliderEl?.parentElement) timeSliderEl.parentElement.style.display = '';
         if (bar) bar.style.display = '';
-        document.getElementById('modeToggle').textContent = '🔄 切换到 WS 模式';
+        if (modeToggleEl) modeToggleEl.textContent = '🔄 切换到 WS 模式';
         updateWsStatus();
 
         // 重建场景
@@ -85,12 +90,17 @@ export function createModeManager(appState, viewManager, playbackHandlers) {
         currentMode = 'ws';
         appState.currentMode = 'ws';
 
-        document.getElementById('startIdx').parentElement.style.display = 'none';
-        document.getElementById('endIdx').parentElement.style.display = 'none';
-        document.getElementById('timeSlider').parentElement.style.display = 'none';
+        const startIdxEl = document.getElementById('startIdx');
+        const endIdxEl = document.getElementById('endIdx');
+        const timeSliderEl = document.getElementById('timeSlider');
         const bar = document.getElementById('time-bar-container');
+        const modeToggleEl = document.getElementById('modeToggle');
+        
+        if (startIdxEl?.parentElement) startIdxEl.parentElement.style.display = 'none';
+        if (endIdxEl?.parentElement) endIdxEl.parentElement.style.display = 'none';
+        if (timeSliderEl?.parentElement) timeSliderEl.parentElement.style.display = 'none';
         if (bar) bar.style.display = 'none';
-        document.getElementById('modeToggle').textContent = '🔄 切换到 CSV 模式';
+        if (modeToggleEl) modeToggleEl.textContent = '🔄 切换到 CSV 模式';
         connectWs(true);
     }
 

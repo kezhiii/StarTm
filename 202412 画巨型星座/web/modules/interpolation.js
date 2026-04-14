@@ -68,9 +68,11 @@ export function updateSatellitesThirdPersonInterp(interpData, sceneObjects, inte
     for (let i = interpData.length; i < sceneObjects.satelliteMeshes3D.length; i++) {
         sceneObjects.satelliteMeshes3D[i].visible = false;
     }
-    document.getElementById('coordDisplay').textContent =
+    const coordDisplay = document.getElementById('coordDisplay');
+    const timeDisplay = document.getElementById('timeDisplay');
+    if (coordDisplay) coordDisplay.textContent =
         `纬度 ${interaction.currentLat.toFixed(1)}°  经度 ${interaction.currentLon.toFixed(1)}°  时间 ${formatTimestamp(interpData[0][0])}`;
-    document.getElementById('timeDisplay').textContent = formatTimestamp(interpData[0][0]);
+    if (timeDisplay) timeDisplay.textContent = formatTimestamp(interpData[0][0]);
 }
 
 /**
@@ -214,8 +216,10 @@ export function updateSatellitesFirstPersonInterp(interpData, appState) {
     for (let i = interpData.length; i < sceneObjects.satelliteMeshes1D.length; i++) {
         sceneObjects.satelliteMeshes1D[i].visible = false;
     }
-    document.getElementById('visibleCount').textContent = visibleCount;
-    document.getElementById('timeDisplay').textContent = formatTimestamp(interpData[0][0]);
+    const visibleCountEl = document.getElementById('visibleCount');
+    const timeDisplay = document.getElementById('timeDisplay');
+    if (visibleCountEl) visibleCountEl.textContent = visibleCount;
+    if (timeDisplay) timeDisplay.textContent = formatTimestamp(interpData[0][0]);
 
     // 应用灯光状态（在渲染后）
     if (lightMgr) {
@@ -304,8 +308,12 @@ export function updateSatellitesCenterPersonInterp(interpData, appState, camera,
         updateCameraFn(camera, appState, cameraPanOffset, centerPos);
     }
 
-    document.getElementById('coordDisplay').textContent =
+    const coordDisplay = document.getElementById('coordDisplay');
+    const visibleCountEl = document.getElementById('visibleCount');
+    const timeDisplay = document.getElementById('timeDisplay');
+    
+    if (coordDisplay) coordDisplay.textContent =
         `纬度 ${appState.interaction.currentLat.toFixed(1)}°  经度 ${appState.interaction.currentLon.toFixed(1)}°  时间 ${formatTimestamp(interpData[0][0])}`;
-    document.getElementById('visibleCount').textContent = visibleCount;
-    document.getElementById('timeDisplay').textContent = formatTimestamp(interpData[0][0]);
+    if (visibleCountEl) visibleCountEl.textContent = visibleCount;
+    if (timeDisplay) timeDisplay.textContent = formatTimestamp(interpData[0][0]);
 }

@@ -25,40 +25,41 @@ export function createUiManager(appState, viewManager, playbackHandlers, orbitRi
         const endSelect = document.getElementById('endIdx');
         const slider = document.getElementById('timeSlider');
 
-        startSelect.innerHTML = '';
-        endSelect.innerHTML = '';
+        // 兼容新界面：startIdx/endIdx 可能不存在
+        if (startSelect) {
+            startSelect.innerHTML = '';
+            appState.csv.timeIndices.forEach((ts, idx) => {
+                const opt = document.createElement('option');
+                opt.value = idx;
+                opt.textContent = formatTimestamp(ts);
+                startSelect.appendChild(opt);
+            });
+            startSelect.addEventListener('change', () => {
+                csvState.startIdx = parseInt(startSelect.value);
+                if (csvState.currentTimeIdx < csvState.startIdx) {
+                    csvState.currentTimeIdx = csvState.startIdx;
+                    slider.value = csvState.currentTimeIdx;
+                }
+            });
+        }
 
-        appState.csv.timeIndices.forEach((ts, idx) => {
-            const opt1 = document.createElement('option');
-            opt1.value = idx;
-            opt1.textContent = formatTimestamp(ts);
-            startSelect.appendChild(opt1);
-
-            const opt2 = document.createElement('option');
-            opt2.value = idx;
-            opt2.textContent = formatTimestamp(ts);
-            endSelect.appendChild(opt2);
-        });
-
-        endSelect.value = appState.csv.timeIndices.length - 1;
-        csvState.startIdx = 0;
-        csvState.endIdx = appState.csv.timeIndices.length - 1;
-
-        startSelect.addEventListener('change', () => {
-            csvState.startIdx = parseInt(startSelect.value);
-            if (csvState.currentTimeIdx < csvState.startIdx) {
-                csvState.currentTimeIdx = csvState.startIdx;
-                slider.value = csvState.currentTimeIdx;
-            }
-        });
-
-        endSelect.addEventListener('change', () => {
-            csvState.endIdx = parseInt(endSelect.value);
-            if (csvState.currentTimeIdx > csvState.endIdx) {
-                csvState.currentTimeIdx = csvState.endIdx;
-                slider.value = csvState.currentTimeIdx;
-            }
-        });
+        if (endSelect) {
+            endSelect.innerHTML = '';
+            appState.csv.timeIndices.forEach((ts, idx) => {
+                const opt = document.createElement('option');
+                opt.value = idx;
+                opt.textContent = formatTimestamp(ts);
+                endSelect.appendChild(opt);
+            });
+            endSelect.value = appState.csv.timeIndices.length - 1;
+            endSelect.addEventListener('change', () => {
+                csvState.endIdx = parseInt(endSelect.value);
+                if (csvState.currentTimeIdx > csvState.endIdx) {
+                    csvState.currentTimeIdx = csvState.endIdx;
+                    slider.value = csvState.currentTimeIdx;
+                }
+            });
+        }
 
         slider.max = Math.max(0, appState.csv.timeIndices.length - 1);
         slider.addEventListener('input', () => {
@@ -70,18 +71,26 @@ export function createUiManager(appState, viewManager, playbackHandlers, orbitRi
      * 初始化视角按钮
      */
     function initViewButtons() {
-        document.getElementById('thirdViewBtn').addEventListener('click', () => switchView('third'));
-        document.getElementById('firstViewBtn').addEventListener('click', () => switchView('first'));
-        document.getElementById('centerViewBtn').addEventListener('click', () => switchView('center'));
+        const thirdBtn = document.getElementById('thirdViewBtn');
+        const firstBtn = document.getElementById('firstViewBtn');
+        const centerBtn = document.getElementById('centerViewBtn');
+
+        if (thirdBtn) thirdBtn.addEventListener('click', () => switchView('third'));
+        if (firstBtn) firstBtn.addEventListener('click', () => switchView('first'));
+        if (centerBtn) centerBtn.addEventListener('click', () => switchView('center'));
     }
 
     /**
      * 初始化播放控制
      */
     function initPlaybackControls() {
-        document.getElementById('playBtn').addEventListener('click', startPlay);
-        document.getElementById('stopBtn').addEventListener('click', stopPlay);
-        document.getElementById('speed').addEventListener('change', changeSpeed);
+        const playBtn = document.getElementById('playBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const speedSelect = document.getElementById('speed');
+
+        if (playBtn) playBtn.addEventListener('click', startPlay);
+        if (stopBtn) stopBtn.addEventListener('click', stopPlay);
+        if (speedSelect) speedSelect.addEventListener('change', changeSpeed);
     }
 
     /**
@@ -89,6 +98,7 @@ export function createUiManager(appState, viewManager, playbackHandlers, orbitRi
      */
     function initLockView() {
         const btn = document.getElementById('lockViewBtn');
+        if (!btn) return; // 新界面可能没有此按钮
         btn.addEventListener('click', () => {
             interactionState.isViewLocked = !interactionState.isViewLocked;
             if (interactionState.isViewLocked) {
@@ -105,7 +115,9 @@ export function createUiManager(appState, viewManager, playbackHandlers, orbitRi
      * 初始化文件加载器
      */
     function initFileLoader() {
-        document.getElementById('csvFileInput').addEventListener('change', async (e) => {
+        const csvInput = document.getElementById('csvFileInput');
+        if (!csvInput) return;
+        csvInput.addEventListener('change', async (e) => {
             const file = e.target.files[0];
             if (!file) return;
             DBG.log(`加载文件: ${file.name}`);
@@ -141,7 +153,8 @@ export function createUiManager(appState, viewManager, playbackHandlers, orbitRi
                 csvState.startIdx = 0;
                 csvState.currentTimeIdx = 0;
 
-                document.getElementById('totalSatCount').textContent = appState.csv.satelliteData[0]?.sats?.length || 0;
+                const totalSatCountEl = document.getElementById('totalSatCount');
+                if (totalSatCountEl) totalSatCountEl.textContent = appState.csv.satelliteData[0]?.sats?.length || 0;
                 
                 // 更新轨道环
                 if (orbitRingUpdater) {

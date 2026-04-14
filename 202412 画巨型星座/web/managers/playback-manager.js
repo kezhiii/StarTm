@@ -4,6 +4,9 @@ import { parseTimestamp, dateToJD, formatTimestamp, calcGMST } from '../modules/
 import { latLonToSurface3D } from '../modules/earth-rotation.js';
 import { interpolateSatellites, updateSatellitesThirdPersonInterp, updateSatellitesFirstPersonInterp, updateSatellitesCenterPersonInterp } from '../modules/interpolation.js';
 import { sendWsCommand as sendWsCmd, updateWsStatus as updateWsSts } from '../core/ws-utils.js';
+import { updateSatellitesThirdPersonWs } from '../modules/views/third-person.js';
+import { updateSatellitesFirstPersonWs } from '../modules/views/first-person.js';
+import { updateSatellitesCenterPersonWs } from '../modules/views/center-person.js';
 
 const DBG = {
     log: (...a) => console.log('[PLAYBACK]', ...a),
@@ -58,7 +61,8 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
                                           dateToJD(d1.year, d1.month, d1.day, d1.hour, d1.minute, d1.second)) * 86400);
         }
 
-        const intervalMs = intervalMsOverride || parseInt(document.getElementById('speed').value, 10);
+        const speedEl = document.getElementById('speed');
+        const intervalMs = intervalMsOverride || (speedEl ? parseInt(speedEl.value, 10) : 1000 / 30);
         const framesPerSec = 1000 / intervalMs;
         earthRotationState.speedFactor = framesPerSec * frameIntervalSec;
 
@@ -166,7 +170,8 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
                     ]);
                 }
 
-                document.getElementById('timeSlider').value = csvState.currentTimeIdx;
+                const timeSlider = document.getElementById('timeSlider');
+                if (timeSlider) timeSlider.value = csvState.currentTimeIdx;
                 const bar = document.getElementById('time-bar');
                 if (bar) bar.style.width = (times.length > 1 ? (csvState.currentTimeIdx / (times.length - 1)) * 100 : 0) + '%';
             }
@@ -241,7 +246,8 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
             frameIntervalSec = Math.abs((dateToJD(d2.year, d2.month, d2.day, d2.hour, d2.minute, d2.second) -
                                           dateToJD(d1.year, d1.month, d1.day, d1.hour, d1.minute, d1.second)) * 86400);
         }
-        const intervalMs = parseInt(document.getElementById('speed').value, 10);
+        const speedEl = document.getElementById('speed');
+        const intervalMs = speedEl ? parseInt(speedEl.value, 10) : 1000 / 30;
         const framesPerSec = 1000 / intervalMs;
         earthRotationState.speedFactor = framesPerSec * frameIntervalSec;
 
@@ -337,11 +343,24 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
 
         // 关键修复：在播放启动时设置一次地球自转参数，而不是在循环中重复设置
         // 防止在播放过程中如果 startTime 被清空(如视角切换)导致基准时间不断重置
-        if (wsState.lastStepData?.length > 0) {
+        if (wsState.dataQueue.length > 0) {
             earthRotationState.startTime = performance.now();
-            const d = parseTimestamp(wsState.lastStepData[0][0]);
+            const d = parseTimestamp(wsState.dataQueue[0][0][0]);
             earthRotationState.startJD = dateToJD(d.year, d.month, d.day, d.hour, d.minute, d.second);
             DBG.log(`WS 地球自转参数初始化: startJD=${earthRotationState.startJD.toFixed(4)}`);
+            
+            // 新增：立即使用队列中的首帧更新视图，避免等待第一帧时的空白期
+            console.log('[WS-PLAYBACK] 立即更新视图, currentView=', appState.currentView, 'queueLen=', wsState.dataQueue.length);
+            const firstFrame = wsState.dataQueue[0];
+            if (firstFrame) {
+                if (appState.currentView === 'third') {
+                    updateSatellitesThirdPersonWs(firstFrame, appState.sceneObjects, appState.interaction);
+                } else if (appState.currentView === 'first') {
+                    updateSatellitesFirstPersonWs(firstFrame, appState);
+                } else if (appState.currentView === 'center') {
+                    updateSatellitesCenterPersonWs(firstFrame, appState, camera, cameraPanOffset);
+                }
+            }
         }
 
         let lastFrameTime = performance.now();
@@ -375,7 +394,8 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
                 // if (earthRotationState.startTime === null && stepData?.length > 0) { ... }
 
                 if (stepData?.length > 0) {
-                    document.getElementById('timeDisplay').textContent = formatTimestamp(stepData[0][0]);
+                    const timeDisplay = document.getElementById('timeDisplay');
+                    if (timeDisplay) timeDisplay.textContent = formatTimestamp(stepData[0][0]);
                 }
             }
             
@@ -416,7 +436,7 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
 
             if (interpState.currFrameData) {
                 const progress = Math.min(Math.max(accumulator / wsIntervalMs, 0), 1.0);
-                    
+
                 const interpData = interpolateSatellites(
                     interpState.prevFrameData,
                     interpState.currFrameData,
@@ -426,6 +446,7 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
                 interpState.currentProgress = progress;
 
                 const currentView = appState.currentView;
+                console.log('[WS-PLAYBACK] 更新视图, currentView=', currentView, 'interpData=', interpData ? interpData[0][0] : 'null');
                 if (currentView === 'third') {
                     updateSatellitesThirdPersonInterp(interpData, appState.sceneObjects, appState.interaction);
                 } else if (currentView === 'first') {
@@ -433,6 +454,8 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
                 } else {
                     updateSatellitesCenterPersonInterp(interpData, appState, camera, cameraPanOffset, modules.updateCenterPersonCamera);
                 }
+            } else {
+                console.warn('[WS-PLAYBACK] currFrameData 为 null，跳过更新');
             }
 
             wsState.playbackAnimId = requestAnimationFrame(playbackLoop);
@@ -458,7 +481,7 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
      */
     function connectWebSocket(autoPlay = false, onConnected, onDisconnected) {
         console.log('[WS] 开始连接, autoPlay=', autoPlay);
-        
+
         // 关键修复：页面刷新时强制清理旧连接，防止连接状态异常
         if (wsState.connection) {
             const readyState = wsState.connection.readyState;
@@ -479,100 +502,101 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
         wsState.connectionState = 'connecting';
         updateWsSts(wsState);
 
-        console.log('[WS] 创建新 WebSocket 连接');
-        wsState.connection = new WebSocket(`ws://127.0.0.1:${PORT}`);
+        // 新增：重试机制
+        const maxRetries = 5;
+        const retryDelay = 2000; // 2秒
+        let retryCount = 0;
 
-        wsState.connection.onopen = () => {
-            console.log('[WS] 连接已打开');
-            wsState.connectionState = 'buffering';
-            updateWsSts(wsState);
-            onConnected?.();
-        };
+        function attemptConnection() {
+            console.log(`[WS] 创建新 WebSocket 连接 (尝试 ${retryCount + 1}/${maxRetries})`);
+            wsState.connection = new WebSocket(`ws://127.0.0.1:${PORT}`);
 
-        wsState.connection.onmessage = (event) => {
-            let msg;
-            try { msg = JSON.parse(event.data); } catch (e) { DBG.error('解析失败:', e); return; }
-
-            if (msg.type === 'data' && Array.isArray(msg.data) && msg.data.length > 0) {
-                const isValid = msg.data.every(d => Array.isArray(d) && d.length >= 14);
-                if (!isValid) { DBG.warn('格式错误'); return; }
-
-                // 关键修复：记录数据到达信息
-                if (msg.is_first) {
-                    DBG.log(`收到首帧数据: ${msg.data.length} 帧, 队列总数: ${wsState.dataQueue.length + msg.data.length}`);
-                }
-
-                for (let i = 0; i < msg.data.length; i++) wsState.dataQueue.push(msg.data[i]);
-                while (wsState.dataQueue.length > WS_MAX_QUEUE_SIZE) wsState.dataQueue.shift();
-
-                if (msg.is_first) {
-                    // 初始化灯光管理器（根据 WS 数据中的卫星数量）
-                    if (appState.lightManager && wsState.dataQueue.length > 0) {
-                        const satCount = msg.data[0].length; // 每帧的卫星数
-                        appState.lightManager.init(satCount);
-                        DBG.log(`[LIGHT] WS 模式已初始化 ${satCount} 颗卫星的灯光状态`);
-                    }
-                }
-
-                // 关键修复：后端恢复数据时清除队列空警告标记
-                if (wsState._queueEmptyWarned) {
-                    DBG.log('WS 数据队列恢复，继续播放');
-                    wsState._queueEmptyWarned = false;
-                }
-
-                // 关键修复：只在首次连接时启动播放，防止重复调用
-                if (msg.is_first && !wsState.playbackActive && wsState.autoPlayOnConnect) {
-                    wsState.connectionState = 'playing';
-                    wsState.autoPlayOnConnect = false;
-                    DBG.log('启动 WS 播放循环');
-                    runWsPlayback();
-                }
-                // 移除：不要重复调用runWsPlayback，播放循环已经在运行
-                // if (wsState.playbackActive && !wsState.playbackTimer) runWsPlayback();
-                updateWsSts(wsState);
-            } else if (msg.type === 'command' && msg.cmd === 'paused') {
-                // 处理后端发送的暂停命令
-                DBG.warn('后端已暂停播放');
-                wsState.connectionState = 'paused';
-                updateWsSts(wsState);
-            } else if (msg.type === 'command' && msg.cmd === 'buffering') {
-                // 处理后端发送的计算中命令
-                DBG.warn('后端正在计算数据...');
+            wsState.connection.onopen = () => {
+                console.log('[WS] 连接已打开');
                 wsState.connectionState = 'buffering';
                 updateWsSts(wsState);
-            }
-        };
+                onConnected?.();
+            };
 
-        wsState.connection.onclose = () => {
-            wsState.connectionState = 'disconnected';
-            wsState.connection = null;
-            stopWsPlayback();
-            updateWsSts(wsState);
-            onDisconnected?.();
+            wsState.connection.onerror = (error) => {
+                console.error(`[WS] 连接错误 (尝试 ${retryCount + 1}/${maxRetries})`);
+            };
 
-            // 自动重连：仅在 WS 模式且未达到最大重试次数时
-            if (appState.currentMode === 'ws' && wsState.autoPlayOnConnect) {
-                if (!wsState._reconnectAttempts) wsState._reconnectAttempts = 0;
-                if (wsState._reconnectAttempts < 3) {
-                    wsState._reconnectAttempts++;
-                    const delay = 1500 * wsState._reconnectAttempts; // 递增延迟：1.5s, 3s, 4.5s
-                    DBG.warn(`WS 连接失败，${delay/1000}s 后自动重连 (${wsState._reconnectAttempts}/3)...`);
-                    setTimeout(() => {
-                        if (appState.currentMode === 'ws' && !wsState.connection) {
-                            connectWebSocket(true, onConnected, onDisconnected);
-                        }
-                    }, delay);
+            wsState.connection.onclose = () => {
+                console.log(`[WS] 连接关闭 (尝试 ${retryCount + 1}/${maxRetries})`);
+                
+                // 新增：如果未达到最大重试次数，则重试
+                if (retryCount < maxRetries) {
+                    retryCount++;
+                    console.log(`[WS] ${retryDelay}ms 后重试... (${retryCount}/${maxRetries})`);
+                    wsState.connectionState = 'connecting';
+                    updateWsSts(wsState);
+                    setTimeout(attemptConnection, retryDelay);
                 } else {
-                    DBG.error('WS 自动重连失败（已达最大尝试次数），请手动刷新页面');
-                    wsState._reconnectAttempts = 0;
+                    console.error('[WS] 已达到最大重试次数，连接失败');
+                    wsState.connectionState = 'disconnected';
+                    updateWsSts(wsState);
+                    onDisconnected?.();
                 }
-            }
-        };
+            };
 
-        wsState.connection.onerror = () => {
-            wsState.connectionState = 'disconnected';
-            updateWsSts(wsState);
-        };
+            wsState.connection.onmessage = (event) => {
+                let msg;
+                try { msg = JSON.parse(event.data); } catch (e) { DBG.error('解析失败:', e); return; }
+
+                if (msg.type === 'data' && Array.isArray(msg.data) && msg.data.length > 0) {
+                    const isValid = msg.data.every(d => Array.isArray(d) && d.length >= 14);
+                    if (!isValid) { DBG.warn('格式错误'); return; }
+
+                    // 关键修复：记录数据到达信息
+                    if (msg.is_first) {
+                        DBG.log(`收到首帧数据: ${msg.data.length} 帧, 队列总数: ${wsState.dataQueue.length + msg.data.length}`);
+                    }
+
+                    for (let i = 0; i < msg.data.length; i++) wsState.dataQueue.push(msg.data[i]);
+                    while (wsState.dataQueue.length > WS_MAX_QUEUE_SIZE) wsState.dataQueue.shift();
+
+                    if (msg.is_first) {
+                        // 初始化灯光管理器（根据 WS 数据中的卫星数量）
+                        if (appState.lightManager && wsState.dataQueue.length > 0) {
+                            const satCount = msg.data[0].length; // 每帧的卫星数
+                            appState.lightManager.init(satCount);
+                            DBG.log(`[LIGHT] WS 模式已初始化 ${satCount} 颗卫星的灯光状态`);
+                        }
+                    }
+
+                    // 关键修复：后端恢复数据时清除队列空警告标记
+                    if (wsState._queueEmptyWarned) {
+                        DBG.log('WS 数据队列恢复，继续播放');
+                        wsState._queueEmptyWarned = false;
+                    }
+
+                    // 关键修复：只在首次连接时启动播放，防止重复调用
+                    if (msg.is_first && !wsState.playbackActive && wsState.autoPlayOnConnect) {
+                        wsState.connectionState = 'playing';
+                        wsState.autoPlayOnConnect = false;
+                        DBG.log('启动 WS 播放循环');
+                        runWsPlayback();
+                    }
+                    // 移除：不要重复调用runWsPlayback，播放循环已经在运行
+                    // if (wsState.playbackActive && !wsState.playbackTimer) runWsPlayback();
+                    updateWsSts(wsState);
+                } else if (msg.type === 'command' && msg.cmd === 'paused') {
+                    // 处理后端发送的暂停命令
+                    DBG.warn('后端已暂停播放');
+                    wsState.connectionState = 'paused';
+                    updateWsSts(wsState);
+                } else if (msg.type === 'command' && msg.cmd === 'buffering') {
+                    // 处理后端发送的计算中命令
+                    DBG.warn('后端正在计算数据...');
+                    wsState.connectionState = 'buffering';
+                    updateWsSts(wsState);
+                }
+            };
+        }
+
+        // 开始首次连接尝试
+        attemptConnection();
     }
 
     /**
@@ -657,7 +681,8 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
             DBG.log('changeSpeed: 当前未播放，忽略');
             return;
         }
-        const newIntervalMs = parseInt(document.getElementById('speed').value, 10);
+        const speedEl = document.getElementById('speed');
+        const newIntervalMs = speedEl ? parseInt(speedEl.value, 10) : 200;
         const oldIntervalMs = csvPlaybackState.intervalMs;
 
         DBG.log(`changeSpeed: ${oldIntervalMs}ms → ${newIntervalMs}ms`);
@@ -743,7 +768,8 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
                         ]);
                     }
 
-                    document.getElementById('timeSlider').value = csvState.currentTimeIdx;
+                    const timeSlider = document.getElementById('timeSlider');
+                    if (timeSlider) timeSlider.value = csvState.currentTimeIdx;
                     const bar = document.getElementById('time-bar');
                     if (bar) bar.style.width = (times.length > 1 ? (csvState.currentTimeIdx / (times.length - 1)) * 100 : 0) + '%';
                 }

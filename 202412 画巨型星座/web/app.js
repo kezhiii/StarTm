@@ -90,6 +90,22 @@ function animate() {
         updateMoon(appState);
     }
 
+    // 新增：更新第三视角卫星位置（非播放状态下）
+    if (appState.currentView === 'third' && !csvState.isPlaying && !wsState.playbackActive) {
+        DBG.log('ANIMATE', '更新第三视角卫星, mode=', appState.currentMode, 
+                'csvDataLen=', appState.csv.satelliteData.length, 
+                'wsLastStep=', wsState.lastStepData ? 'exists' : 'null',
+                'timeIdx=', csvState.currentTimeIdx);
+        
+        if (appState.currentMode === 'csv' && appState.csv.satelliteData.length > 0) {
+            updateThirdMod(csvState.currentTimeIdx, appState.csv.satelliteData, appState.sceneObjects, appState.interaction, appState.lightManager);
+        } else if (appState.currentMode === 'ws' && wsState.lastStepData) {
+            updateThirdWsMod(wsState.lastStepData, appState.sceneObjects, appState.interaction, appState.lightManager);
+        } else {
+            DBG.log('ANIMATE', '跳过更新：条件不满足');
+        }
+    }
+
     // 渲染场景
     appCtx.renderer.render(appCtx.scene, appCtx.camera);
 }
@@ -98,8 +114,12 @@ function animate() {
 function initBaseScene() {
     DBG.log('SCENE', '初始化 Three.js 场景');
     const container = document.getElementById('canvasContainer');
+    if (!container) {
+        console.error('[APP] 找不到 canvasContainer 元素');
+        return;
+    }
     appCtx.initBaseScene(container, appState);
-    
+
     // 添加星空背景
     createStarField(appCtx.scene, appState);
 }
@@ -113,10 +133,17 @@ function switchView(view) {
     appState.currentView = view;
     
     // 强制更新按钮高亮
-    document.getElementById('thirdViewBtn').className = view === 'third' ? 'active' : '';
-    document.getElementById('firstViewBtn').className = view === 'first' ? 'active' : '';
-    document.getElementById('centerViewBtn').className = view === 'center' ? 'active' : '';
-    document.getElementById('lockViewGroup').style.display = view === 'center' ? 'block' : 'none';
+    // UI 更新
+    const thirdBtn = document.getElementById('thirdViewBtn');
+    const firstBtn = document.getElementById('firstViewBtn');
+    const centerBtn = document.getElementById('centerViewBtn');
+    const lockGroup = document.getElementById('lockViewGroup');
+
+    // 修复：使用 classList.toggle 保留 view-btn 类，只修改 active 状态
+    if (thirdBtn) thirdBtn.classList.toggle('active', view === 'third');
+    if (firstBtn) firstBtn.classList.toggle('active', view === 'first');
+    if (centerBtn) centerBtn.classList.toggle('active', view === 'center');
+    if (lockGroup) lockGroup.style.display = view === 'center' ? 'block' : 'none';
 
     // 1. 清理旧状态
     transitionMgr.cancel();
@@ -290,6 +317,7 @@ const modules = {
     updateThirdWs: updateThirdWsMod,
     updateFirstPersonWs: updateFirstPersonWsMod,
     updateCenterPersonWs: updateCenterPersonWsMod,
+    updateFirstPersonCamera: updateFirstPersonCameraMod,
     updateStatsPanel: updateStatsPanelModule,
     // 新增：用于插值循环中的主星相机更新
     updateCenterPersonCamera: updateCenterPersonCameraMod
@@ -332,9 +360,12 @@ async function init() {
         appState.csvManager = csvManager;
 
         // 绑定打开面板按钮
-        document.getElementById('openConstellationPanel').addEventListener('click', () => {
-            constellationPanel.toggle();
-        });
+        const openPanelBtn = document.getElementById('openConstellationPanel');
+        if (openPanelBtn) {
+            openPanelBtn.addEventListener('click', () => {
+                constellationPanel.toggle();
+            });
+        }
 
         // 加载默认 CSV
         await csvManager.loadCSV();
@@ -398,10 +429,25 @@ async function init() {
         uiManager.initAll();
 
         // 初始场景
+        console.log('[INIT] 开始初始化第三视角场景');
+        console.log('[INIT] currentMode =', appState.currentMode);
+        console.log('[INIT] csv.satelliteData.length =', appState.csv.satelliteData.length);
+        console.log('[INIT] csv.currentTimeIdx =', csvState.currentTimeIdx);
+        console.log('[INIT] ws.lastStepData =', wsState.lastStepData);
+        
         initThirdPersonSceneMod(appCtx.scene, appCtx.controls, appState);
         appCtx.camera.position.copy(THIRD_PERSON_CAMERA_POS);
         appCtx.controls.target.copy(THIRD_PERSON_CAMERA_TARGET);
         appCtx.controls.update();
+        
+        console.log('[INIT] 第三视角场景初始化完成');
+        console.log('[INIT] sceneObjects.satelliteMeshes3D.length =', appState.sceneObjects.satelliteMeshes3D.length);
+        
+        // 新增：强制更新卫星位置（确保初始化后立即可见）
+        if (appState.csv.satelliteData.length > 0 && csvState.currentTimeIdx >= 0) {
+            console.log('[INIT] 强制更新卫星位置, timeIdx=', csvState.currentTimeIdx);
+            updateThirdMod(csvState.currentTimeIdx, appState.csv.satelliteData, appState.sceneObjects, appState.interaction, appState.lightManager);
+        }
 
         // 9. 启动 WS 连接
         console.log('[INIT] 开始清理 WS 状态');

@@ -113,24 +113,39 @@ export function initThirdPersonScene(scene, controls, appState) {
     controls.enabled = true;
 
     // UI 更新
-    document.getElementById('groundInfo').classList.remove('hidden');
-    document.getElementById('info').querySelector('span').parentElement.parentElement.style.display = 'none';
+    const groundInfo = document.getElementById('groundInfo');
+    const info = document.getElementById('info');
+    if (groundInfo) groundInfo.classList.remove('hidden');
+    if (info) info.style.display = 'none';  // 第三视角隐藏卫星统计
 
     // 数据初始化
+    console.log('[THIRD-INIT] 数据初始化检查:');
+    console.log('[THIRD-INIT] ws.connection =', ws.connection);
+    console.log('[THIRD-INIT] ws.connection.readyState =', ws.connection?.readyState, '(OPEN=', WebSocket.OPEN, ')');
+    console.log('[THIRD-INIT] ws.lastStepData =', ws.lastStepData ? 'exists' : 'null');
+    console.log('[THIRD-INIT] csv.satelliteData.length =', csv.satelliteData.length);
+    console.log('[THIRD-INIT] csv.currentTimeIdx =', csv.state.currentTimeIdx);
+    
     if (ws.connection && ws.connection.readyState === WebSocket.OPEN && ws.lastStepData) {
+        console.log('[THIRD-INIT] 使用 WS 数据初始化');
         const d = parseTimestamp(ws.lastStepData[0][0]);
         appState.earthRotation.startJD = dateToJD(d.year, d.month, d.day, d.hour, d.minute, d.second);
         appState.earthRotation.startTime = performance.now();
         updateSatellitesThirdPersonWs(ws.lastStepData, sceneObjects, appState.interaction);
     } else if (csv.satelliteData.length > 0) {
         // CSV 模式：初始化地球自转基准时间
+        console.log('[THIRD-INIT] 使用 CSV 数据初始化');
         const currentGroup = csv.satelliteData[csv.state.currentTimeIdx];
+        console.log('[THIRD-INIT] currentGroup =', currentGroup ? 'exists' : 'null');
         if (currentGroup) {
             const d = parseTimestamp(currentGroup.timestamp);
             appState.earthRotation.startJD = dateToJD(d.year, d.month, d.day, d.hour, d.minute, d.second);
             appState.earthRotation.startTime = performance.now();
+            console.log('[THIRD-INIT] 调用 updateSatellitesThirdPerson, timeIdx=', csv.state.currentTimeIdx);
         }
         updateSatellitesThirdPerson(csv.state.currentTimeIdx, csv.satelliteData, sceneObjects, appState.interaction);
+    } else {
+        console.warn('[THIRD-INIT] 无可用数据，卫星将不显示');
     }
 }
 
@@ -138,11 +153,20 @@ export function initThirdPersonScene(scene, controls, appState) {
  * 更新第三视角卫星位置 (CSV 模式)
  */
 export function updateSatellitesThirdPerson(timeIdx, satelliteData, sceneObjects, interaction, lightManager = null) {
-    if (timeIdx < 0 || timeIdx >= satelliteData.length) return;
+    DBG.log('UPDATE-CSV', '更新卫星位置, timeIdx=', timeIdx, 'satelliteDataLen=', satelliteData.length, 
+            'sceneObjects3D=', sceneObjects.satelliteMeshes3D.length);
+    
+    if (timeIdx < 0 || timeIdx >= satelliteData.length) {
+        DBG.log('UPDATE-CSV', 'timeIdx 越界，提前返回');
+        return;
+    }
     const data = satelliteData[timeIdx];
 
-    document.getElementById('coordDisplay').textContent =
-        `纬度 ${interaction.currentLat.toFixed(1)}°  经度 ${interaction.currentLon.toFixed(1)}°  时间 ${formatTimestamp(data.timestamp)}`;
+    const coordDisplay = document.getElementById('coordDisplay');
+    if (coordDisplay) {
+        coordDisplay.textContent =
+            `纬度 ${interaction.currentLat.toFixed(1)}°  经度 ${interaction.currentLon.toFixed(1)}°  时间 ${formatTimestamp(data.timestamp)}`;
+    }
 
     data.sats.forEach((sat, idx) => {
         if (idx >= sceneObjects.satelliteMeshes3D.length) return;
@@ -180,8 +204,11 @@ export function updateSatellitesThirdPersonWs(stepData, sceneObjects, interactio
         sceneObjects.satelliteMeshes3D[i].visible = false;
     }
 
-    document.getElementById('coordDisplay').textContent =
-        `纬度 ${interaction.currentLat.toFixed(1)}°  经度 ${interaction.currentLon.toFixed(1)}°  时间 ${formatTimestamp(stepData[0][0])}`;
+    const coordDisplay = document.getElementById('coordDisplay');
+    if (coordDisplay) {
+        coordDisplay.textContent =
+            `纬度 ${interaction.currentLat.toFixed(1)}°  经度 ${interaction.currentLon.toFixed(1)}°  时间 ${formatTimestamp(stepData[0][0])}`;
+    }
 
     // 应用灯光状态
     if (lightManager) {

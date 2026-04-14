@@ -96,9 +96,13 @@ export function initCenterPersonScene(scene, controls, appState) {
     controls.enablePan = false;
     controls.enableZoom = false;
 
-    document.getElementById('lockViewGroup').style.display = 'block';
-    document.getElementById('groundInfo').classList.remove('hidden');
-    document.getElementById('info').querySelector('span').parentElement.parentElement.style.display = 'none';
+    const lockViewGroup = document.getElementById('lockViewGroup');
+    const groundInfo = document.getElementById('groundInfo');
+    const info = document.getElementById('info');
+    
+    if (lockViewGroup) lockViewGroup.style.display = 'block';
+    if (groundInfo) groundInfo.classList.remove('hidden');
+    if (info) info.style.display = 'none';  // 主星视角隐藏卫星统计
 
     // 修复：初始化地球自转基准时间和相机位置
     if (ws.connection && ws.connection.readyState === WebSocket.OPEN && ws.lastStepData) {
@@ -198,9 +202,13 @@ export function updateSatellitesCenterPerson(timeIdx, appState, camera, cameraPa
         if (sceneObjects.satelliteMeshesCenter[i]) sceneObjects.satelliteMeshesCenter[i].visible = false;
     }
 
-    document.getElementById('coordDisplay').textContent = `纬度 ${appState.interaction.currentLat.toFixed(1)}°  经度 ${appState.interaction.currentLon.toFixed(1)}°  时间 ${formatTimestamp(group.timestamp)}`;
-    document.getElementById('visibleCount').textContent = visibleCount;
-    document.getElementById('timeDisplay').textContent = formatTimestamp(group.timestamp);
+    const coordDisplay = document.getElementById('coordDisplay');
+    const visibleCountEl = document.getElementById('visibleCount');
+    const timeDisplayEl = document.getElementById('timeDisplay');
+    
+    if (coordDisplay) coordDisplay.textContent = `纬度 ${appState.interaction.currentLat.toFixed(1)}°  经度 ${appState.interaction.currentLon.toFixed(1)}°  时间 ${formatTimestamp(group.timestamp)}`;
+    if (visibleCountEl) visibleCountEl.textContent = visibleCount;
+    if (timeDisplayEl) timeDisplayEl.textContent = formatTimestamp(group.timestamp);
 
     // 相机跟随主星位置
     if (camera) {
@@ -268,9 +276,13 @@ export function updateSatellitesCenterPersonWs(stepData, appState, camera, camer
         if (sceneObjects.satelliteMeshesCenter[i]) sceneObjects.satelliteMeshesCenter[i].visible = false;
     }
 
-    document.getElementById('coordDisplay').textContent = `纬度 ${appState.interaction.currentLat.toFixed(1)}°  经度 ${appState.interaction.currentLon.toFixed(1)}°  时间 ${formatTimestamp(stepData[0][0])}`;
-    document.getElementById('visibleCount').textContent = visibleCount;
-    document.getElementById('timeDisplay').textContent = formatTimestamp(stepData[0][0]);
+    const coordDisplay = document.getElementById('coordDisplay');
+    const visibleCountEl = document.getElementById('visibleCount');
+    const timeDisplayEl = document.getElementById('timeDisplay');
+    
+    if (coordDisplay) coordDisplay.textContent = `纬度 ${appState.interaction.currentLat.toFixed(1)}°  经度 ${appState.interaction.currentLon.toFixed(1)}°  时间 ${formatTimestamp(stepData[0][0])}`;
+    if (visibleCountEl) visibleCountEl.textContent = visibleCount;
+    if (timeDisplayEl) timeDisplayEl.textContent = formatTimestamp(stepData[0][0]);
 
     // Update camera position (Pass the calculated centerPos directly)
     if (camera) {

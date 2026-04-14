@@ -1,6 +1,7 @@
 // ======================== WebSocket 实时模式模块 ========================
 import { parseTimestamp, dateToJD, formatTimestamp } from '../math-utils.js';
 import { WS_MAX_QUEUE_SIZE } from '../config.js';
+import { updateWsStatus } from '../../core/ws-utils.js';
 
 /**
  * 连接 WebSocket 服务器
@@ -240,21 +241,4 @@ export function sendWsCommand(appState, cmd) {
     }
 }
 
-/**
- * 更新 WS 状态显示
- */
-export function updateWsStatus(appState) {
-    const statusDot = document.getElementById('ws-status-dot');
-    const statusText = document.getElementById('ws-status-text');
-    if (!statusDot || !statusText) return;
-    
-    statusDot.className = 'dot ' + appState.ws.connectionState;
-    const texts = {
-        disconnected: '未连接',
-        connecting: '连接中...',
-        buffering: '计算中...',
-        playing: '实时播放',
-        paused: '已暂停'
-    };
-    statusText.textContent = texts[appState.ws.connectionState] || '未知';
-}
+// 注意：updateWsStatus 已从 ws-utils.js 导入，此处的本地实现已移除以避免重复

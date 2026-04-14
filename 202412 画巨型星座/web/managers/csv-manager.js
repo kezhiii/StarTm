@@ -105,6 +105,8 @@ export function createCsvManager(appState, lightManager, constellationPanel) {
                 Vz: satArray[COL.Vz]
             }))
         }));
+        csvState.startIdx = 0;
+        csvState.currentTimeIdx = 0;
         csvState.endIdx = timestamps.length - 1;
     }
 
@@ -141,6 +143,8 @@ export function createCsvManager(appState, lightManager, constellationPanel) {
             appState.csv.satelliteData = appState.csv.timeIndices.map(ts => ({
                 timestamp: ts, sats: grouped[ts]
             }));
+            csvState.startIdx = 0;
+            csvState.currentTimeIdx = 0;
             csvState.endIdx = appState.csv.timeIndices.length - 1;
 
             // 初始化灯光管理器

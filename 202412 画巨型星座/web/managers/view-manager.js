@@ -38,6 +38,7 @@ export function createViewManager(engine, appState, modules) {
         initThirdPerson, initFirstPerson, initCenterPerson,
         updateThird, updateFirstPerson, updateCenterPerson,
         updateThirdWs, updateFirstPersonWs, updateCenterPersonWs,
+        updateFirstPersonCamera,
         animateTransition
     } = modules;
 
@@ -80,10 +81,16 @@ export function createViewManager(engine, appState, modules) {
         appState.currentView = view;
 
         // UI 更新
-        document.getElementById('thirdViewBtn').className = view === 'third' ? 'active' : '';
-        document.getElementById('firstViewBtn').className = view === 'first' ? 'active' : '';
-        document.getElementById('centerViewBtn').className = view === 'center' ? 'active' : '';
-        document.getElementById('lockViewGroup').style.display = view === 'center' ? 'block' : 'none';
+        const thirdBtn = document.getElementById('thirdViewBtn');
+        const firstBtn = document.getElementById('firstViewBtn');
+        const centerBtn = document.getElementById('centerViewBtn');
+        const lockGroup = document.getElementById('lockViewGroup');
+
+        // 修复：使用 classList.toggle 保留 view-btn 类，只修改 active 状态
+        if (thirdBtn) thirdBtn.classList.toggle('active', view === 'third');
+        if (firstBtn) firstBtn.classList.toggle('active', view === 'first');
+        if (centerBtn) centerBtn.classList.toggle('active', view === 'center');
+        if (lockGroup) lockGroup.style.display = view === 'center' ? 'block' : 'none';
 
         // 清理
         if (appState.cache.transitionAnimId) {
@@ -119,6 +126,8 @@ export function createViewManager(engine, appState, modules) {
             appState.interaction.fpAzimuth = 0;
             appState.interaction.fpElevation = 45 * DEG;
             setCamera(new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 1, 0));
+            // 新增：初始化相机朝向和方位角/仰角显示
+            updateFirstPersonCamera(appState.camera, appState);
             if (currentMode === 'csv' && appState.csv.satelliteData.length > 0) {
                 csvState.currentTimeIdx = Math.max(0, Math.min(csvState.currentTimeIdx, appState.csv.satelliteData.length - 1));
                 updateFirstPerson(csvState.currentTimeIdx, appState);

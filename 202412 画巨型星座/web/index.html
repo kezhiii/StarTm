@@ -3,94 +3,180 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>卫星编队地面观测</title>
+    <title>轨道星座 · 第一人称观测终端</title>
     <link rel="icon" href="data:,">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Audiowide&family=Rajdhani:wght@300;400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div id="controls">
-        <div class="control-group view-switch">
-            <button id="thirdViewBtn" class="active">🌍 第三视角</button>
-            <button id="firstViewBtn">👁 第一视角</button>
-            <button id="centerViewBtn">🛰️ 主星视角</button>
+    <!-- 顶部状态栏 -->
+    <header id="top-bar">
+        <div class="brand">
+            <span class="logo-mark">◉</span>
+            <span class="brand-text">轨道星座观测终端</span>
         </div>
-        <div class="control-group" id="lockViewGroup" style="display:none;">
-            <button id="lockViewBtn" class="active">🔒 锁定视角</button>
+        <div class="status-group">
+            <div class="status-item">
+                <span class="status-dot" id="ws-dot"></span>
+                <span class="status-label" id="ws-status">离线</span>
+            </div>
+            <div class="status-item data-rate">
+                <span class="rate-value" id="data-rate">0</span>
+                <span class="rate-unit">帧/秒</span>
+            </div>
+            <div class="status-item clock">
+                <span id="system-clock">--:--:--</span>
+            </div>
         </div>
-        <hr>
-        <div class="control-group">
-            <label>数据文件:</label>
-            <input type="file" id="csvFileInput" accept=".csv">
+    </header>
+
+    <!-- 左侧控制面板 -->
+    <aside id="control-panel">
+        <section class="panel-section">
+            <h3 class="section-title">观测视角</h3>
+            <div class="view-switcher">
+                <button id="thirdViewBtn" class="view-btn active" title="第三视角">
+                    <span class="btn-icon">🌍</span>
+                    <span class="btn-label">轨道</span>
+                </button>
+                <button id="firstViewBtn" class="view-btn" title="第一视角">
+                    <span class="btn-icon">👁</span>
+                    <span class="btn-label">地面</span>
+                </button>
+                <button id="centerViewBtn" class="view-btn" title="主星视角">
+                    <span class="btn-icon">🛰️</span>
+                    <span class="btn-label">编队</span>
+                </button>
+            </div>
+        </section>
+
+        <div class="panel-divider"></div>
+
+        <section class="panel-section">
+            <h3 class="section-title">地面站坐标</h3>
+            <div class="coord-inputs">
+                <div class="input-group">
+                    <label>纬度</label>
+                    <input type="number" id="lat" value="-15" step="0.1" min="-90" max="90">
+                </div>
+                <div class="input-group">
+                    <label>经度</label>
+                    <input type="number" id="lon" value="-125" step="0.1" min="-180" max="180">
+                </div>
+            </div>
+            <button id="apply" class="action-btn">应用坐标</button>
+        </section>
+
+        <div class="panel-divider"></div>
+
+        <section class="panel-section" id="lockViewGroup" style="display:none;">
+            <button id="lockViewBtn" class="action-btn">🔒 锁定视角</button>
+        </section>
+
+        <section class="panel-section">
+            <h3 class="section-title">数据源</h3>
+            <div class="mode-toggle">
+                <button id="modeToggle" class="mode-btn">
+                    <span class="mode-icon">📡</span>
+                    <span class="mode-text">WS 实时</span>
+                </button>
+            </div>
+            <div class="file-input-wrapper">
+                <label for="csvFileInput" class="file-label">
+                    <span class="file-icon">📄</span>
+                    <span>加载 CSV</span>
+                </label>
+                <input type="file" id="csvFileInput" accept=".csv" class="hidden-input">
+            </div>
+        </section>
+
+        <div class="panel-divider"></div>
+
+        <section class="panel-section">
+            <h3 class="section-title">时间轴控制</h3>
+            <!-- 隐藏的时间范围选择器（兼容旧 JS 代码） -->
+            <div style="display:none;">
+                <select id="startIdx"></select>
+                <select id="endIdx"></select>
+            </div>
+            <div class="time-control">
+                <div class="time-display" id="timeDisplay">--:--:--</div>
+                <input type="range" id="timeSlider" min="0" max="1439" value="0" class="time-slider">
+                <div class="time-bar-container">
+                    <div id="time-bar"></div>
+                </div>
+            </div>
+            <div class="playback-controls">
+                <button id="playBtn" class="play-btn" title="播放">
+                    <span class="play-icon">▶</span>
+                </button>
+                <button id="stopBtn" class="stop-btn" title="停止">
+                    <span class="stop-icon">■</span>
+                </button>
+                <select id="speed" class="speed-select" title="播放速度">
+                    <option value="200" selected>1×</option>
+                    <option value="40">5×</option>
+                    <option value="20">10×</option>
+                    <option value="13">15×</option>
+                </select>
+            </div>
+        </section>
+
+        <div class="panel-divider"></div>
+
+        <section class="panel-section">
+            <h3 class="section-title">卫星统计</h3>
+            <div class="sat-stats" id="info">
+                <div class="stat-row">
+                    <span class="stat-label">可见</span>
+                    <span class="stat-value" id="visibleCount">0</span>
+                    <span class="stat-sep">/</span>
+                    <span class="stat-total" id="totalSatCount">22</span>
+                </div>
+                <button id="statsBtn" class="stats-btn">📊 详细</button>
+                <div id="visibility-info" class="visibility-list"></div>
+            </div>
+        </section>
+
+        <div class="panel-divider"></div>
+
+        <section class="panel-section">
+            <button id="openConstellationPanel" class="constellation-btn">
+                🛰️ 编队灯光控制
+            </button>
+        </section>
+    </aside>
+
+    <!-- 主画布区域 -->
+    <main id="canvasContainer"></main>
+
+    <!-- 底部信息条（兼容 groundInfo ID） -->
+    <footer id="info-bar">
+        <div class="info-item" id="groundInfo">
+            <span class="info-label">地面站</span>
+            <span class="info-value" id="coordDisplay">--</span>
         </div>
-        <hr>
-        <div class="control-group">
-            <label>纬度 (°):</label>
-            <input type="number" id="lat" value="-15" step="0.1" min="-90" max="90">
+        <div class="info-divider"></div>
+        <div class="info-item">
+            <span class="info-label">方位角</span>
+            <span class="info-value" id="azimuth-display">--</span>
         </div>
-        <div class="control-group">
-            <label>经度 (°):</label>
-            <input type="number" id="lon" value="-125" step="0.1" min="-180" max="180">
+        <div class="info-divider"></div>
+        <div class="info-item">
+            <span class="info-label">仰角</span>
+            <span class="info-value" id="elevation-display">--</span>
         </div>
-        <div class="control-group">
-            <button id="apply">应用位置</button>
-            <button id="statsBtn">📊 统计</button>
-        </div>
-        <hr>
-        <div class="control-group">
-            <label>起始时间:</label>
-            <select id="startIdx"></select>
-        </div>
-        <div class="control-group">
-            <label>结束时间:</label>
-            <select id="endIdx"></select>
-        </div>
-        <hr>
-        <div class="control-group">
-            <label>时间轴:</label>
-            <input type="range" id="timeSlider" min="0" max="1439" value="0">
-            <span id="timeDisplay">--</span>
-        </div>
-        <div id="time-bar-container">
-            <div id="time-bar"></div>
-        </div>
-        <div class="control-group">
-            <button id="playBtn">▶ 播放</button>
-            <button id="stopBtn">■ 停止</button>
-            <label>速度:</label>
-            <select id="speed">
-                <option value="200" selected>1X</option>
-                <option value="40">5X</option>
-                <option value="20">10X</option>
-                <option value="13">15X</option>
-            </select>
-        </div>
-        <div class="control-group">
-            <button id="modeToggle">🔄 切换到 CSV 模式</button>
-        </div>
-        <hr>
-        <div class="control-group" id="lightControlGroup">
-            <button id="openConstellationPanel" style="width: 100%;">🛰️ 打开编队灯光控制</button>
-        </div>
-        <hr>
-        <div id="info">
-            <div>可见卫星: <span id="visibleCount">0</span> / <span id="totalSatCount">22</span></div>
-        </div>
-        <div id="visibility-info"></div>
-    </div>
+    </footer>
+
+    <!-- 统计面板 -->
     <div id="stats-panel" class="hidden">
         <div class="stats-header">
-            <h4>📊 统计信息</h4>
+            <h4>📊 详细统计</h4>
             <button id="closeStatsBtn">✕</button>
         </div>
         <div id="stats-content"></div>
-    </div>
-    <div id="canvasContainer"></div>
-    <div id="ws-status-bar">
-        <span id="ws-status-dot" class="dot disconnected"></span>
-        <span id="ws-status-text">未连接</span>
-    </div>
-    <div id="groundInfo" class="hidden">
-        地面站: <span id="coordDisplay">--</span>
     </div>
 
     <script type="importmap">

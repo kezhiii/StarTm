@@ -144,8 +144,10 @@ export function initFirstPersonScene(scene, controls, camera, appState) {
     initMoon(scene, appState);
 
     controls.enabled = false;
-    document.getElementById('groundInfo').classList.add('hidden');
-    document.getElementById('info').querySelector('span').parentElement.parentElement.style.display = '';
+    const groundInfo = document.getElementById('groundInfo');
+    const info = document.getElementById('info');
+    if (groundInfo) groundInfo.classList.add('hidden');
+    if (info) info.style.display = '';  // 第一视角显示卫星统计
 
     // 修复：确保初始化地球自转基准时间和卫星位置
     // 注意：相机更新由 switchView 中的调用完成，这里只初始化卫星位置
@@ -180,6 +182,14 @@ export function updateFirstPersonCamera(camera, appState) {
         -Math.cos(elRad) * Math.cos(appState.interaction.fpAzimuth)
     );
     camera.lookAt(lookAtTarget);
+
+    // 新增：更新方位角和仰角显示
+    const azDeg = (appState.interaction.fpAzimuth / DEG) % 360;
+    const elDeg = appState.interaction.fpElevation;
+    const azDisplay = document.getElementById('azimuth-display');
+    const elDisplay = document.getElementById('elevation-display');
+    if (azDisplay) azDisplay.textContent = azDeg.toFixed(1) + '°';
+    if (elDisplay) elDisplay.textContent = elDeg.toFixed(1) + '°';
 }
 
 /**
@@ -257,8 +267,10 @@ export function updateSatellitesFirstPerson(timeIdx, appState) {
     for (let i = group.sats.length; i < sceneObjects.satelliteMeshes1D.length; i++) {
         sceneObjects.satelliteMeshes1D[i].visible = false;
     }
-    document.getElementById('visibleCount').textContent = visibleCount;
-    document.getElementById('timeDisplay').textContent = formatTimestamp(group.timestamp);
+    const visibleCountEl = document.getElementById('visibleCount');
+    const timeDisplayEl = document.getElementById('timeDisplay');
+    if (visibleCountEl) visibleCountEl.textContent = visibleCount;
+    if (timeDisplayEl) timeDisplayEl.textContent = formatTimestamp(group.timestamp);
 
     // === 新增：更新月球位置 (CSV 模式) ===
     if (sceneObjects.moon && appState.moonECI) {
@@ -538,7 +550,8 @@ export function updateSatellitesFirstPersonWs(stepData, appState) {
     for (let i = stepData.length; i < sceneObjects.satelliteMeshes1D.length; i++) {
         sceneObjects.satelliteMeshes1D[i].visible = false;
     }
-    document.getElementById('visibleCount').textContent = visibleCount;
+    const visibleCountEl = document.getElementById('visibleCount');
+    if (visibleCountEl) visibleCountEl.textContent = visibleCount;
 
     // === 更新月球位置 (WS 模式) ===
     if (sceneObjects.moon) {

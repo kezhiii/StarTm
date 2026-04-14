@@ -31,7 +31,8 @@ export function startCsvPlayback(appState, getCurrentViewFn, intervalMsOverride)
                                       dateToJD(d1.year, d1.month, d1.day, d1.hour, d1.minute, d1.second)) * 86400);
     }
 
-    const intervalMs = intervalMsOverride || parseInt(document.getElementById('speed').value, 10);
+    const speedEl = document.getElementById('speed');
+    const intervalMs = intervalMsOverride || (speedEl ? parseInt(speedEl.value, 10) : 1000 / 30);
     const framesPerSec = 1000 / intervalMs;
     appState.earthRotation.speedFactor = framesPerSec * frameIntervalSec;
 
@@ -77,7 +78,8 @@ export function startCsvPlayback(appState, getCurrentViewFn, intervalMsOverride)
                 ]);
             }
 
-            document.getElementById('timeSlider').value = state.currentTimeIdx;
+            const timeSlider = document.getElementById('timeSlider');
+            if (timeSlider) timeSlider.value = state.currentTimeIdx;
             const bar = document.getElementById('time-bar');
             if (bar) bar.style.width = (times.length > 1 ? (state.currentTimeIdx / (times.length - 1)) * 100 : 0) + '%';
         }
@@ -152,7 +154,8 @@ export function createPlaybackController(appState, getCurrentViewFn) {
                 startCsvPlayback(appState, getCurrentViewFn, intervalMsOverride);
             } else {
                 // 速度切换：保持状态只改间隔
-                const intervalMs = intervalMsOverride || parseInt(document.getElementById('speed').value, 10);
+                const speedEl = document.getElementById('speed');
+                const intervalMs = intervalMsOverride || (speedEl ? parseInt(speedEl.value, 10) : 1000 / 30);
                 startCsvPlayback(appState, getCurrentViewFn, intervalMs);
             }
         },
@@ -214,7 +217,8 @@ export function createPlaybackController(appState, getCurrentViewFn) {
             if (appState.currentMode === 'ws') return;
             if (!appState.csv.state.isPlaying) return;
 
-            const intervalMs = parseInt(document.getElementById('speed').value, 10);
+            const speedEl = document.getElementById('speed');
+            const intervalMs = speedEl ? parseInt(speedEl.value, 10) : 1000 / 30;
             if (appState.csv.state.playbackAnimId) {
                 cancelAnimationFrame(appState.csv.state.playbackAnimId);
             }

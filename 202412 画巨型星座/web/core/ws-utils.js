@@ -18,10 +18,10 @@ export function sendWsCommand(connection, cmd) {
  * 更新 WebSocket 状态 UI
  */
 export function updateWsStatus(wsState) {
-    const statusDot = document.getElementById('ws-status-dot');
-    const statusText = document.getElementById('ws-status-text');
+    const statusDot = document.getElementById('ws-dot');
+    const statusText = document.getElementById('ws-status');
     if (!statusDot || !statusText) return;
-    statusDot.className = 'dot ' + wsState.connectionState;
+    statusDot.className = 'status-dot ' + wsState.connectionState;
     const texts = {
         disconnected: '未连接',
         connecting: '连接中...',

@@ -56,8 +56,11 @@ export function calculateVisibilityWindows(appState) {
  * 更新统计面板
  */
 export function updateStatsPanel(appState) {
+    const statsContent = document.getElementById('stats-content');
+    if (!statsContent) return;
+    
     if (appState.currentMode === 'ws') {
-        document.getElementById('stats-content').innerHTML = '<div>WS 模式下统计面板暂不可用</div><div>请使用 CSV 模式查看统计信息</div>';
+        statsContent.innerHTML = '<div>WS 模式下统计面板暂不可用</div><div>请使用 CSV 模式查看统计信息</div>';
         return;
     }
     if (!appState.csv.satelliteData.length) return;
@@ -79,7 +82,11 @@ export function updateStatsPanel(appState) {
     }
     const windows = calculateVisibilityWindows(appState);
     const totalVisMin = Object.values(windows).reduce((sum, w) => sum + w.reduce((s, win) => s + win.duration, 0), 0);
-    document.getElementById('stats-content').innerHTML = `<div><strong>当前时刻:</strong> ${formatTimestamp(data.timestamp)}</div><div><strong>卫星总数:</strong> ${data.sats.length}</div><div><strong>高度范围:</strong> ${minAlt.toFixed(1)} ~ ${maxAlt.toFixed(1)} km</div><div><strong>平均高度:</strong> ${(alts.length > 0 ? alts.reduce((a, b) => a + b, 0) / alts.length : 0).toFixed(1)} km</div><div><strong>编队间距:</strong> ${minDist === Infinity ? 0 : minDist.toFixed(2)} ~ ${maxDist.toFixed(2)} km</div><div><strong>可见卫星:</strong> ${document.getElementById('visibleCount').textContent} / ${data.sats.length}</div><div><strong>总可见时间:</strong> ${totalVisMin} 分钟</div><hr style="margin: 10px 0; border-color: #333;"><div><strong>快捷键:</strong></div><div>空格 = 播放/暂停</div><div>1/2/3 = 切换视角</div><div>←/→ = 上一帧/下一帧</div>`;
+    
+    const visibleCountEl = document.getElementById('visibleCount');
+    const visibleCountText = visibleCountEl ? visibleCountEl.textContent : '0';
+    
+    statsContent.innerHTML = `<div><strong>当前时刻:</strong> ${formatTimestamp(data.timestamp)}</div><div><strong>卫星总数:</strong> ${data.sats.length}</div><div><strong>高度范围:</strong> ${minAlt.toFixed(1)} ~ ${maxAlt.toFixed(1)} km</div><div><strong>平均高度:</strong> ${(alts.length > 0 ? alts.reduce((a, b) => a + b, 0) / alts.length : 0).toFixed(1)} km</div><div><strong>编队间距:</strong> ${minDist === Infinity ? 0 : minDist.toFixed(2)} ~ ${maxDist.toFixed(2)} km</div><div><strong>可见卫星:</strong> ${visibleCountText} / ${data.sats.length}</div><div><strong>总可见时间:</strong> ${totalVisMin} 分钟</div><hr style="margin: 10px 0; border-color: #333;"><div><strong>快捷键:</strong></div><div>空格 = 播放/暂停</div><div>1/2/3 = 切换视角</div><div>←/→ = 上一帧/下一帧</div>`;
 }
 
 /**
@@ -88,11 +95,13 @@ export function updateStatsPanel(appState) {
 export function initStatsPanel(updateCallback) {
     const statsBtn = document.getElementById('statsBtn');
     const closeBtn = document.getElementById('closeStatsBtn');
+    const statsPanel = document.getElementById('stats-panel');
+    
     if (statsBtn) statsBtn.addEventListener('click', () => {
-        document.getElementById('stats-panel').classList.remove('hidden');
+        if (statsPanel) statsPanel.classList.remove('hidden');
         if (updateCallback) updateCallback();
     });
     if (closeBtn) closeBtn.addEventListener('click', () => {
-        document.getElementById('stats-panel').classList.add('hidden');
+        if (statsPanel) statsPanel.classList.add('hidden');
     });
 }
