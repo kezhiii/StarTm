@@ -480,7 +480,7 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
         updateWsSts(wsState);
 
         console.log('[WS] 创建新 WebSocket 连接');
-        wsState.connection = new WebSocket(`ws://localhost:${PORT}`);
+        wsState.connection = new WebSocket(`ws://127.0.0.1:${PORT}`);
 
         wsState.connection.onopen = () => {
             console.log('[WS] 连接已打开');

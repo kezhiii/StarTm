@@ -21,7 +21,7 @@ export function connectWebSocket(appState, updateCallbacks, autoPlay = false) {
         updateCallbacks.onStatusUpdate(appState);
     }
     
-    ws.connection = new WebSocket('ws://localhost:8765');
+    ws.connection = new WebSocket('ws://127.0.0.1:8765');
     
     ws.connection.onopen = () => {
         ws.connectionState = 'buffering';
