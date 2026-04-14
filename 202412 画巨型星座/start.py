@@ -6,6 +6,9 @@ import threading
 import http.server
 import socketserver
 
+# 导入 CSV API 服务
+from api_csv import start_csv_api
+
 DIR = os.path.dirname(os.path.abspath(__file__))
 os.chdir(DIR)
 
@@ -52,6 +55,13 @@ http_thread.start()
 # 等待HTTP服务器启动
 time.sleep(0.5)
 
+# 在后台线程启动 CSV API 服务（端口 8080）
+csv_api_thread = threading.Thread(target=start_csv_api, daemon=True)
+csv_api_thread.start()
+
+# 等待CSV API 服务启动
+time.sleep(0.5)
+
 # 启动WebSocket服务器 (端口 8765)
 print("启动WebSocket服务器 (端口 8765)...")
 ws_proc = subprocess.Popen(
@@ -64,8 +74,9 @@ print("\n" + "=" * 50)
 print("所有服务已启动!")
 print("=" * 50)
 print(f"前端页面: http://localhost:8000/web/index.html")
-print(f"HTTP端口: 8000")
-print(f"WebSocket端口: 8765")
+print(f"HTTP端口:   8000 (前端静态资源)")
+print(f"CSV API:    8080 (CSV 预处理 API)")
+print(f"WebSocket:  8765 (实时轨道递推)")
 print("\n按 Ctrl+C 停止所有服务")
 print("=" * 50)
 
