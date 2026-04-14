@@ -63,8 +63,10 @@ let lightManager = null;
 let constellationPanel = null;
 
 // ======================== 调试日志辅助 ========================
+// 开发环境输出详细日志，生产环境仅保留警告和错误
+const isDev = typeof process !== 'undefined' && process.env && process.env.NODE_ENV === 'development';
 const DBG = {
-    log: (m, ...a) => console.log(`[${m}]`, ...a),
+    log: isDev ? (m, ...a) => console.log(`[${m}]`, ...a) : () => {},
     warn: (m, ...a) => console.warn(`[${m}]`, ...a),
     error: (m, ...a) => console.error(`[${m}]`, ...a)
 };

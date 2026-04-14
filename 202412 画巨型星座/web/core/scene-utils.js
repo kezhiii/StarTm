@@ -33,7 +33,10 @@ export function clearSceneObjects(scene, camera, appState) {
                 mats.forEach(m => { if (!sharedRes.has(m)) m.dispose(); });
             }
         } catch (e) {
-            // 忽略单个对象的清理错误
+            // 开发环境输出警告，帮助发现潜在 bug
+            if (typeof process !== 'undefined' && process.env && process.env.NODE_ENV === 'development') {
+                console.warn('[SCENE] 清理对象失败:', e.message || e);
+            }
         }
     });
 

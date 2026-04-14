@@ -97,6 +97,15 @@ export function createState() {
             currentInterpData: null,
             interpProgress: 0,
             interpAnimId: null,
+            // 月球插值状态（从 first-person.js 模块级变量移入，防止多实例冲突）
+            moonInterpState: {
+                prevAz: 0, prevEl: 0, prevRange: 0,
+                targetAz: 0, targetEl: 0, targetRange: 0,
+                initialized: false,
+                lastProgress: 0
+            },
+            lastMoonLogTime: 0,
+            lastMoonInterpLogTime: 0,
         },
         
         // 地球自转相关

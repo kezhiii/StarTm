@@ -296,16 +296,7 @@ export function updateSatellitesFirstPerson(timeIdx, appState) {
     }
 }
 
-// 每秒输出月球日志的状态
-let lastMoonLogTime = 0;
-let lastMoonInterpLogTime = 0;
-// 月球插值状态
-let moonInterpState = {
-    prevAz: 0, prevEl: 0, prevRange: 0,
-    targetAz: 0, targetEl: 0, targetRange: 0,
-    initialized: false,
-    lastProgress: 0
-};
+// 移除模块级变量，已移至 appState.interpolation
 
 /**
  * 每帧更新第一视角月球位置（在 animate 中调用）
@@ -316,6 +307,8 @@ export function updateMoonFirstPerson(appState) {
 
     const { currentLat, currentLon } = appState.interaction;
     const { sceneObjects } = appState;
+    // 从 appState 获取插值状态（防止多实例冲突）
+    const moonInterpState = appState.interpolation.moonInterpState;
 
     // 获取当前时间戳：根据模式选择数据源
     let d = null;
@@ -327,41 +320,41 @@ export function updateMoonFirstPerson(appState) {
     } else if (currentMode === 'csv') {
         // CSV 模式：直接从 CSV 数据中获取当前帧的时间戳
         const debugNow = performance.now();
-        
+
         if (!appState.csv.satelliteData || appState.csv.satelliteData.length === 0) {
-            if (debugNow - lastMoonLogTime >= 2000) {
-                lastMoonLogTime = debugNow;
+            if (debugNow - appState.interpolation.lastMoonLogTime >= 2000) {
+                appState.interpolation.lastMoonLogTime = debugNow;
                 console.warn(`[MOON-CSV] CSV数据为空! currentMode=${currentMode}, 是否已加载CSV文件?`);
             }
             return;
         }
-        
+
         const idx = appState.csv.state.currentTimeIdx;
         if (idx < 0 || idx >= appState.csv.satelliteData.length) {
-            if (debugNow - lastMoonLogTime >= 2000) {
-                lastMoonLogTime = debugNow;
+            if (debugNow - appState.interpolation.lastMoonLogTime >= 2000) {
+                appState.interpolation.lastMoonLogTime = debugNow;
                 console.warn(`[MOON-CSV] 索引越界! idx=${idx}, dataLength=${appState.csv.satelliteData.length}`);
             }
             return;
         }
-        
+
         const frameData = appState.csv.satelliteData[idx];
         const timestamp = frameData.timestamp;
-        
+
         // 调试：查看时间戳原始值
-        if (debugNow - lastMoonLogTime >= 2000) {
-            lastMoonLogTime = debugNow;
+        if (debugNow - appState.interpolation.lastMoonLogTime >= 2000) {
+            appState.interpolation.lastMoonLogTime = debugNow;
             console.log(`[MOON-TS-DEBUG] idx=${idx}, timestamp=`, timestamp, `, type=${typeof timestamp}, length=${timestamp ? timestamp.length : 'N/A'}`);
         }
-        
+
         d = parseTimestamp(timestamp);
     }
 
     if (!d || isNaN(d.year) || isNaN(d.month) || isNaN(d.day)) {
         // 调试日志：帮助诊断时间戳问题
         const nowDebug = performance.now();
-        if (nowDebug - lastMoonLogTime >= 2000) {
-            lastMoonLogTime = nowDebug;
+        if (nowDebug - appState.interpolation.lastMoonLogTime >= 2000) {
+            appState.interpolation.lastMoonLogTime = nowDebug;
             console.warn(`[MOON-FIRST] 时间戳解析失败! d=`, d, `, currentTimeIdx=`, appState.csv.state.currentTimeIdx);
         }
         return;
@@ -387,8 +380,8 @@ export function updateMoonFirstPerson(appState) {
 
     // 每秒输出月球日志
     const now = performance.now();
-    if (now - lastMoonLogTime >= 1000) {
-        lastMoonLogTime = now;
+    if (now - appState.interpolation.lastMoonLogTime >= 1000) {
+        appState.interpolation.lastMoonLogTime = now;
         // 【V2修复】直接格式化日期对象，而不是使用formatTimestamp
         const timeStr = `${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')} ${String(d.hour).padStart(2,'0')}:${String(d.minute).padStart(2,'0')}:${String(d.second).padStart(2,'0')}`;
         console.log(`[MOON-FIRST-V2] time=${timeStr}, obs: lat=${currentLat.toFixed(2)}°, lon=${currentLon.toFixed(2)}°, moonLocal: az=${moonLocal.az.toFixed(2)}°, el=${moonLocal.el.toFixed(2)}°, range=${moonLocal.range.toFixed(1)} km`);
@@ -408,7 +401,7 @@ export function updateMoonFirstPerson(appState) {
     // 月球可见性判断
     if (moonLocal.el >= 0) {
         sceneObjects.moon.visible = true;
-        
+
         // 更新插值状态
         if (!moonInterpState.initialized) {
             // 首次调用，直接设置目标位置
@@ -419,56 +412,56 @@ export function updateMoonFirstPerson(appState) {
             moonInterpState.targetEl = moonLocal.el;
             moonInterpState.targetRange = moonLocal.range;
             moonInterpState.initialized = true;
-            
+
             sceneObjects.moon.position.set(targetPosX, targetPosY, targetPosZ);
             console.log('[MOON-INTERP] 初始化月球插值状态');
         } else {
             // 获取插值进度（0-1之间）
             const progress = appState.interpolation.currentProgress || 0;
             const prevProgress = moonInterpState.lastProgress || 0;
-            
+
             // 检测帧切换：进度重置或跳跃
             const frameChanged = progress < prevProgress || Math.abs(progress - prevProgress) > 0.5;
-            
+
             moonInterpState.lastProgress = progress;
-            
+
             if (frameChanged) {
                 // 帧已切换，保存旧目标作为新的前一帧
                 moonInterpState.prevAz = moonInterpState.targetAz;
                 moonInterpState.prevEl = moonInterpState.targetEl;
                 moonInterpState.prevRange = moonInterpState.targetRange;
-                
+
                 moonInterpState.targetAz = moonLocal.az;
                 moonInterpState.targetEl = moonLocal.el;
                 moonInterpState.targetRange = moonLocal.range;
-                
+
                 // 每秒输出一次插值状态日志
-                if (now - lastMoonInterpLogTime >= 1000) {
-                    lastMoonInterpLogTime = now;
+                if (now - appState.interpolation.lastMoonInterpLogTime >= 1000) {
+                    appState.interpolation.lastMoonInterpLogTime = now;
                     console.log(`[MOON-INTERP] 帧切换! progress=${progress.toFixed(3)}, prevEl=${moonInterpState.prevEl.toFixed(2)}°, targetEl=${moonInterpState.targetEl.toFixed(2)}°`);
                 }
             }
-            
+
             // 使用插值进度计算平滑位置
             const interpProgress = frameChanged ? 0 : progress;
             const smoothAz = moonInterpState.prevAz + (moonInterpState.targetAz - moonInterpState.prevAz) * interpProgress;
             const smoothEl = moonInterpState.prevEl + (moonInterpState.targetEl - moonInterpState.prevEl) * interpProgress;
             const smoothRange = moonInterpState.prevRange + (moonInterpState.targetRange - moonInterpState.prevRange) * interpProgress;
-            
+
             // 转换为场景坐标
             const smoothAzR = smoothAz * DEG;
             const smoothElR = smoothEl * DEG;
             const smoothDist = (smoothRange * (RE_3D / RE_KM)) / MOON_SCALE;
-            
+
             const smoothX = smoothDist * Math.cos(smoothElR) * Math.sin(smoothAzR);
             const smoothY = smoothDist * Math.sin(smoothElR);
             const smoothZ = -smoothDist * Math.cos(smoothElR) * Math.cos(smoothAzR);
-            
+
             sceneObjects.moon.position.set(smoothX, smoothY, smoothZ);
-            
+
             // 每秒输出一次插值后位置日志
-            if (now - lastMoonInterpLogTime >= 1000) {
-                lastMoonInterpLogTime = now;
+            if (now - appState.interpolation.lastMoonInterpLogTime >= 1000) {
+                appState.interpolation.lastMoonInterpLogTime = now;
                 console.log(`[MOON-INTERP] progress=${progress.toFixed(3)}, interpProgress=${interpProgress.toFixed(3)}, smoothEl=${smoothEl.toFixed(2)}°, smoothPos=(${smoothX.toFixed(1)}, ${smoothY.toFixed(1)}, ${smoothZ.toFixed(1)})`);
             }
         }

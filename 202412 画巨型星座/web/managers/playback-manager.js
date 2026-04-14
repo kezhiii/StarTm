@@ -135,6 +135,12 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
             lastFrameTime = now;
             accumulator += delta;
 
+            // 关键修复：限制 accumulator 最大值，防止浏览器标签页后台运行后返回时一次性处理大量帧导致卡顿
+            const maxAccumulator = intervalMs * 10; // 最大10帧
+            if (accumulator > maxAccumulator) {
+                accumulator = maxAccumulator;
+            }
+
             while (accumulator >= intervalMs) {
                 accumulator -= intervalMs;
                 if (csvState.currentTimeIdx >= csvState.endIdx) {
@@ -267,6 +273,12 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
                 gsPos.applyAxisAngle(new THREE.Vector3(0, 1, 0), gmst);
                 sceneObjects.groundStationMarker3D.position.copy(gsPos);
             }
+            
+            // 关键修复：暂停状态下拖动时间轴，更新 pausedStartJD
+            // 否则点击播放时地球会跳变回暂停时刻的状态
+            csvPlaybackState.pausedStartJD = newStartJD;
+            csvPlaybackState.pausedSimulatedTime = 0;
+            DBG.log(`seekToIndex(停止): 更新 pausedStartJD=${newStartJD.toFixed(4)}`);
         }
 
         csvPlaybackState.lastFrameTime = performance.now();
