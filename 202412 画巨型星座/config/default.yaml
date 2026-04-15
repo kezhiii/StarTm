@@ -1,0 +1,56 @@
+# ============================================================
+# 巨型星座 3D 可视化系统 - 默认配置
+# ============================================================
+
+server:
+  http_port: 8000
+  csv_api_port: 8080
+  ws_port: 8765
+  ws_host: "0.0.0.0"
+
+propagation:
+  initial_push_seconds: 5
+  compute_interval: 10
+  push_interval: 10
+  buffer_capacity: 3600
+  dt: 1.0
+
+constellation:
+  name: "Constellation"
+  start_year: 2021
+  start_month: 8
+  start_day: 17
+  center_oe_file: "Input/centerOEmat.txt"
+  deputy_oe_file: "Input/deputyOEmat.txt"
+
+constellation_params:
+  orbit_height: 400000        # 轨道高度 (m)
+  inclination_deg: 55         # 轨道倾角 (度)
+  phase_factor: 0             # 相位因子
+  plane_count: 20             # 轨道面数
+  satellites_per_plane: 15    # 每轨道面卫星数
+
+physics:
+  mu: 3.986004418e14          # 地心引力常数 (m³/s²)
+  mu_moon: 4.903e12           # 月球引力常数 (m³/s²)
+  mu_sun: 1.32712440018e20    # 太阳引力常数 (m³/s²)
+  RE: 6.378137e6              # 地球半径 (m)
+  J2: 1.082626683e-3          # J2摄动参数
+  wE: 7.2921159e-5            # 地球自转角速度 (rad/s)
+  satellite_mass: 300.0       # 卫星质量 (kg)
+  cross_section: 0.785        # 横截面积 (m²)
+  drag_coefficient: 2.2       # 阻力系数
+
+units:
+  hours_to_seconds: 3600
+  days_to_seconds: 86400
+  deg_to_rad: 0.017453292519943295  # π/180
+
+csv:
+  default_path: "Output/test_1.csv"
+  api_port: 8080
+  compress: true
+
+logging:
+  level: "INFO"
+  format: "[%(name)s] %(message)s"

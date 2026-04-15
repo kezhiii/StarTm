@@ -1,0 +1,174 @@
+"""
+星座类
+
+管理多颗卫星的集合，提供批量操作接口。
+"""
+
+from __future__ import annotations
+import os
+from typing import Optional
+
+import numpy as np
+
+from .satellite import Satellite
+from .orbit_elements import OrbitElements
+from .inertial_state import InertialState
+from .physical_props import PhysicalProps
+from .frame_data import FrameData, SatelliteSnapshot
+
+
+class Constellation:
+    """
+    星座管理：多颗卫星的集合。
+    
+    属性:
+        name: 星座名称
+        satellites: 卫星列表（按 sat_id 排序）
+        physical_props: 默认物理属性（所有卫星共用）
+    """
+    
+    def __init__(self, name: str = "Constellation", physical_props: Optional[PhysicalProps] = None):
+        self.name = name
+        self._satellites: dict[int, Satellite] = {}
+        self.physical_props = physical_props or PhysicalProps.default()
+    
+    @property
+    def satellites(self) -> list[Satellite]:
+        """获取按 sat_id 排序的卫星列表"""
+        return [self._satellites[k] for k in sorted(self._satellites.keys())]
+    
+    @property
+    def sat_count(self) -> int:
+        """卫星数量"""
+        return len(self._satellites)
+    
+    @classmethod
+    def from_input_files(
+        cls,
+        center_oe_path: str,
+        deputy_oe_path: str,
+        physical_props: Optional[PhysicalProps] = None,
+        name: str = "Constellation"
+    ) -> Constellation:
+        """
+        从输入文件创建星座。
+        
+        Args:
+            center_oe_path: 主星轨道根数文件路径 (Input/centerOEmat.txt)
+            deputy_oe_path: 从星轨道根数文件路径 (Input/deputyOEmat.txt)
+            physical_props: 物理属性
+            name: 星座名称
+        
+        Returns:
+            Constellation 实例
+        """
+        constellation = cls(name=name, physical_props=physical_props)
+        
+        # 读取主星轨道根数
+        center_oe = np.loadtxt(center_oe_path)
+        # 格式: [a(km), e, i(deg), OMG(deg), omg(deg), f(deg)]
+        center_sat = Satellite(
+            sat_id=0,
+            orbit_elements=OrbitElements.from_array(center_oe.tolist()),
+            inertial_state=InertialState(x=0, y=0, z=0, vx=0, vy=0, vz=0),  # 初始值，后续计算
+            physical_props=physical_props or PhysicalProps.default()
+        )
+        constellation.add_satellite(center_sat)
+        
+        # 读取从星轨道根数
+        deputy_oe = np.loadtxt(deputy_oe_path)
+        # 格式: 每列一颗卫星 [a, e, i, OMG, omg, f]
+        for idx in range(deputy_oe.shape[1]):
+            sat_oe = deputy_oe[:, idx]
+            sat = Satellite(
+                sat_id=idx + 1,
+                orbit_elements=OrbitElements.from_array(sat_oe.tolist()),
+                inertial_state=InertialState(x=0, y=0, z=0, vx=0, vy=0, vz=0),
+                physical_props=physical_props or PhysicalProps.default()
+            )
+            constellation.add_satellite(sat)
+        
+        return constellation
+    
+    def add_satellite(self, satellite: Satellite) -> None:
+        """添加卫星"""
+        self._satellites[satellite.sat_id] = satellite
+    
+    def remove_satellite(self, sat_id: int) -> bool:
+        """
+        移除卫星。
+        
+        Returns:
+            是否成功移除
+        """
+        if sat_id in self._satellites:
+            del self._satellites[sat_id]
+            return True
+        return False
+    
+    def get_satellite(self, sat_id: int) -> Optional[Satellite]:
+        """获取指定卫星"""
+        return self._satellites.get(sat_id)
+    
+    def get_snapshot(self, timestamp: str) -> FrameData:
+        """
+        获取当前所有卫星的快照。
+        
+        Args:
+            timestamp: 时间戳字符串
+        
+        Returns:
+            FrameData 实例
+        """
+        snapshots = []
+        for sat in self.satellites:
+            oe = sat.orbit_elements.to_array()
+            inertial = sat.inertial_state.to_array()
+            snapshots.append(SatelliteSnapshot(
+                sat_id=sat.sat_id,
+                orbit_elements=oe,
+                position=inertial[:3],
+                velocity=inertial[3:]
+            ))
+        
+        return FrameData(
+            timestamp=timestamp,
+            satellites=snapshots
+        )
+    
+    def get_numpy_matrix(self) -> np.ndarray:
+        """
+        获取所有卫星的轨道根数矩阵（用于 JIT 计算）。
+        
+        Returns:
+            numpy.ndarray: shape (N, 6), [a(m), e, i(rad), OMG(rad), omg(rad), f(rad)]
+        """
+        matrix = np.zeros((self.sat_count, 6))
+        for i, sat in enumerate(self.satellites):
+            matrix[i] = sat.orbit_elements.to_numpy()
+        return matrix
+    
+    def update_from_numpy_matrix(self, matrix: np.ndarray) -> None:
+        """
+        从 numpy 矩阵更新所有卫星的轨道根数。
+        
+        Args:
+            matrix: shape (N, 6), [a(m), e, i(rad), OMG(rad), omg(rad), f(rad)]
+        """
+        for i, sat in enumerate(self.satellites):
+            if i < matrix.shape[0]:
+                new_oe = OrbitElements.from_numpy(matrix[i])
+                sat.update_orbit_elements(new_oe)
+    
+    def update_inertial_states(self, states: list[InertialState]) -> None:
+        """
+        批量更新所有卫星的惯性状态。
+        
+        Args:
+            states: 惯性状态列表（按 sat_id 排序）
+        """
+        for sat, state in zip(self.satellites, states):
+            sat.update_inertial_state(state)
+    
+    def __repr__(self) -> str:
+        return f"Constellation(name={self.name!r}, satellites={self.sat_count})"

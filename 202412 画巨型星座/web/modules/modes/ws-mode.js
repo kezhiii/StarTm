@@ -132,10 +132,6 @@ export function connectWebSocket(appState, updateCallbacks, autoPlay = false) {
         if (sliderParent) sliderParent.style.display = '';
         if (barContainer) barContainer.style.display = '';
 
-        // 更新模式切换按钮
-        const modeBtn = document.getElementById('modeToggle');
-        if (modeBtn) modeBtn.innerHTML = '<span class="mode-icon">📄</span><span class="mode-text">CSV 回放</span>';
-
         // 触发过渡动画
         if (updateCallbacks.onTransition) {
             updateCallbacks.onTransition('third');

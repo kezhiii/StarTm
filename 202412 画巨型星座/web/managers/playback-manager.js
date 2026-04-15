@@ -222,6 +222,12 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
      * 跳转到指定时间索引
      */
     function seekToIndex(newIdx) {
+        // WS 模式下不支持时间轴拖动（实时数据无历史）
+        if (appState.currentMode === 'ws') {
+            DBG.warn('WS 模式下不支持时间轴拖动');
+            return;
+        }
+
         const data = appState.csv.satelliteData;
         if (!data || !data[newIdx]) return;
 
