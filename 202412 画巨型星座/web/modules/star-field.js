@@ -12,7 +12,6 @@ const TEXTURE_URL = './image/milky_way.jpg';
  */
 export function createStarField(scene, appState) {
     try {
-        console.log('[STARS] 正在通过备用代理加载 8K 银河贴图...');
         scene.background = new THREE.Color(0x000005);
 
         const loader = new THREE.TextureLoader();
@@ -42,7 +41,6 @@ export function createStarField(scene, appState) {
                 if (appState && appState.sceneObjects) {
                     appState.sceneObjects.starField = starField;
                 }
-                console.log('[STARS] 8K 银河贴图加载成功');
             },
             undefined,
             (err) => {
@@ -132,7 +130,6 @@ function createRealisticStarField(scene, appState) {
         if (appState && appState.sceneObjects) {
             appState.sceneObjects.starField = starField;
         }
-        console.log(`[STARS] 高保真星空粒子系统已创建 (粒子数: ${count})`);
     } catch (e) {
         console.error('[STARS] 粒子星空创建失败:', e);
     }

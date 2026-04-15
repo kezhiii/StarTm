@@ -484,6 +484,51 @@ body {
     color: var(--text-secondary);
 }
 
+/* 时间范围选择器 */
+.time-range-container {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+
+.time-range-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.time-range-label {
+    flex-shrink: 0;
+    width: 32px;
+    color: var(--text-secondary);
+    font-size: 10px;
+    font-family: var(--font-mono);
+    text-align: right;
+}
+
+.time-range-select {
+    flex: 1;
+    padding: 6px 8px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.time-range-select:focus {
+    outline: none;
+    border-color: var(--border-active);
+}
+
+.time-range-select option {
+    background: var(--bg-deep);
+    color: var(--text-secondary);
+}
+
 /* 卫星统计 */
 .sat-stats {
     margin-bottom: 4px;

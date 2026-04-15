@@ -34,19 +34,17 @@ export function connectWebSocket(appState, updateCallbacks, autoPlay = false) {
         }
 
         // 隐藏 CSV UI 元素
-        const startIdxParent = document.getElementById('startIdx')?.parentElement;
-        const endIdxParent = document.getElementById('endIdx')?.parentElement;
+        const timeRangeContainer = document.getElementById('timeRangeContainer');
         const sliderParent = document.getElementById('timeSlider')?.parentElement;
         const barContainer = document.getElementById('time-bar-container');
-        
-        if (startIdxParent) startIdxParent.style.display = 'none';
-        if (endIdxParent) endIdxParent.style.display = 'none';
+
+        if (timeRangeContainer) timeRangeContainer.style.display = 'none';
         if (sliderParent) sliderParent.style.display = 'none';
         if (barContainer) barContainer.style.display = 'none';
         
-        // 更新模式切换按钮文本
+        // 更新模式切换按钮
         const modeBtn = document.getElementById('modeToggle');
-        if (modeBtn) modeBtn.textContent = '🔄 切换到 CSV 模式';
+        if (modeBtn) modeBtn.innerHTML = '<span class="mode-icon">📡</span><span class="mode-text">WS 实时</span>';
         
         if (updateCallbacks.onStatusUpdate) {
             updateCallbacks.onStatusUpdate(appState);
@@ -126,19 +124,17 @@ export function connectWebSocket(appState, updateCallbacks, autoPlay = false) {
         }
         
         // 恢复 CSV UI 元素
-        const startIdxParent = document.getElementById('startIdx')?.parentElement;
-        const endIdxParent = document.getElementById('endIdx')?.parentElement;
+        const timeRangeContainer = document.getElementById('timeRangeContainer');
         const sliderParent = document.getElementById('timeSlider')?.parentElement;
         const barContainer = document.getElementById('time-bar-container');
-        
-        if (startIdxParent) startIdxParent.style.display = '';
-        if (endIdxParent) endIdxParent.style.display = '';
+
+        if (timeRangeContainer) timeRangeContainer.style.display = 'flex';
         if (sliderParent) sliderParent.style.display = '';
         if (barContainer) barContainer.style.display = '';
-        
-        if (updateCallbacks.onStatusUpdate) {
-            updateCallbacks.onStatusUpdate(appState);
-        }
+
+        // 更新模式切换按钮
+        const modeBtn = document.getElementById('modeToggle');
+        if (modeBtn) modeBtn.innerHTML = '<span class="mode-icon">📄</span><span class="mode-text">CSV 回放</span>';
 
         // 触发过渡动画
         if (updateCallbacks.onTransition) {

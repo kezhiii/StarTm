@@ -1,15 +1,15 @@
 // ======================== 第一视角模块 ========================
-// 【V3修复标记 - 2026-04-12 22:30】月球时间戳和插值修复
-// 如果看到此日志，说明模块已正确加载
-console.log('[FIRST-PERSON-MODULE] 模块已加载 V3');
 import * as THREE from 'three';
 import { DEG, RE_KM, RE_3D, sharedResources } from '../config.js';
 import { parseTimestamp, dateToJD, calcGMST, eciToEcef, ecefToLocal, formatTimestamp } from '../math-utils.js';
 import { initMoon, calcMoonECIForDataTimestamp } from '../moon-orbit.js';
+import { createLogger } from '../../core/logger.js';
 
 const { SKY_GEOM, SKY_MAT, HORIZON_PLANE_GEOM, HORIZON_PLANE_MAT,
         HORIZON_RING_GEOM, HORIZON_RING_MAT, GS_MARKER_1ST_GEOM, GS_MARKER_1ST_MAT,
         SAT_GEOM_1ST, SAT_MAT_1ST } = sharedResources;
+
+const log = createLogger('FIRST-PERSON');
 
 /**
  * 生成简单的网格地面纹理（避免加载外部图片）
@@ -72,9 +72,9 @@ export function initFirstPersonScene(scene, controls, camera, appState) {
         }
         camera.fov = firstPersonFOV;
         camera.updateProjectionMatrix();
-        console.log(`[FIRST-PERSON] FOV 设置为: ${firstPersonFOV}° (原始FOV=${scene.userData.originalFOV}°)`);
+        log.debug(`FOV 设置为: ${firstPersonFOV}°`);
     } else {
-        console.warn('[FIRST-PERSON] 相机未传入，无法设置FOV');
+        log.warn('相机未传入，无法设置FOV');
     }
 
     // 注意：不要设置 scene.background 为纯色，否则会覆盖星空
@@ -138,7 +138,7 @@ export function initFirstPersonScene(scene, controls, camera, appState) {
         scene.add(mesh);
         sceneObjects.satelliteMeshes1D.push(mesh);
     }
-    console.log(`[FIRST-PERSON] 已初始化 ${sceneObjects.satelliteMeshes1D.length} 颗卫星网格, sceneObj ID: ${sceneObjects.__id || (sceneObjects.__id = Math.random().toString(36).substr(2, 5))}`);
+    log.debug(`已初始化 ${sceneObjects.satelliteMeshes1D.length} 颗卫星网格`);
 
     // 初始化月球 (使用模块化方法)
     initMoon(scene, appState);
@@ -186,8 +186,9 @@ export function updateFirstPersonCamera(camera, appState) {
     // 新增：更新方位角和仰角显示
     const azDeg = (appState.interaction.fpAzimuth / DEG) % 360;
     const elDeg = appState.interaction.fpElevation;
-    const azDisplay = document.getElementById('azimuth-display');
-    const elDisplay = document.getElementById('elevation-display');
+    const domCache = appState.domCache;
+    const azDisplay = domCache ? domCache.get('azimuth-display') : document.getElementById('azimuth-display');
+    const elDisplay = domCache ? domCache.get('elevation-display') : document.getElementById('elevation-display');
     if (azDisplay) azDisplay.textContent = azDeg.toFixed(1) + '°';
     if (elDisplay) elDisplay.textContent = elDeg.toFixed(1) + '°';
 }
@@ -210,65 +211,68 @@ export function updateSatellitesFirstPerson(timeIdx, appState) {
     const SCENE_SCALE = RE_3D / RE_KM;
     const FORMATION_SCALE = 5;
 
+    // 优化：使用局部变量缓存，减少对象属性访问
+    const meshes = sceneObjects.satelliteMeshes1D;
+    const sats = group.sats;
+    const satCount = sats.length;
+    
     // 第一遍：计算编队中心方向（度数）
-    // 关键修复：使用圆周平均处理360°环绕问题
-    let centerAzSumX = 0, centerAzSumY = 0, centerElSum = 0, validCount = 0;
-    group.sats.forEach((sat) => {
+    let centerAzSumX = 0, centerAzSumY = 0, centerElSum = 0;
+    for (let i = 0; i < satCount; i++) {
+        const sat = sats[i];
         const ecef = eciToEcef(sat.X, sat.Y, sat.Z, gmst);
         const local = ecefToLocal(ecef.x, ecef.y, ecef.z, currentLat, currentLon);
-        // 所有卫星都计入（包括地平线下的）
         const azRad = local.az * DEG;
         centerAzSumX += Math.cos(azRad);
         centerAzSumY += Math.sin(azRad);
         centerElSum += local.el;
-        validCount++;
-    });
+    }
+    
     let centerAz = 0, centerEl = 0;
-    if (validCount > 0) {
+    if (satCount > 0) {
         centerAz = Math.atan2(centerAzSumY, centerAzSumX) / DEG;
         if (centerAz < 0) centerAz += 360;
-        centerEl = centerElSum / validCount;
+        centerEl = centerElSum / satCount;
     }
 
     // 第二遍：渲染卫星
     let visibleCount = 0;
-    group.sats.forEach((sat, idx) => {
-        if (idx >= sceneObjects.satelliteMeshes1D.length) return;
+    const lightMgr = appState.lightManager;
+    const hasLightMgr = !!lightMgr;
+    
+    for (let idx = 0; idx < satCount && idx < meshes.length; idx++) {
+        const sat = sats[idx];
+        const mesh = meshes[idx];
+        
         const ecef = eciToEcef(sat.X, sat.Y, sat.Z, gmst);
         const local = ecefToLocal(ecef.x, ecef.y, ecef.z, currentLat, currentLon);
-        sceneObjects.satelliteMeshes1D[idx].visible = true;
+        mesh.visible = true;
 
-        // 检查灯光状态：如果卫星已开灯，跳过默认颜色设置
-        const isLightOn = appState.lightManager && appState.lightManager.getLightState(idx);
+        // 检查灯光状态
+        const isLightOn = hasLightMgr && lightMgr.getLightState(idx);
         if (!isLightOn) {
-            // 关灯：使用默认颜色
-            if (local.el >= 0) {
-                sceneObjects.satelliteMeshes1D[idx].material.color.setHex(0x00ff00);
-            } else {
-                sceneObjects.satelliteMeshes1D[idx].material.color.setHex(0xff3333);
-            }
+            mesh.material.color.setHex(local.el >= 0 ? 0x00ff00 : 0xff3333);
         }
-        // 开灯状态：由灯光管理器控制颜色，此处不覆盖
 
-        if (local.el >= 0) {
-            visibleCount++;
-        }
-        // 距离缩小5倍，角度偏移也放大5倍，使卫星分散开
+        if (local.el >= 0) visibleCount++;
+        
         const displayDist = (local.range * SCENE_SCALE) / FORMATION_SCALE;
-        // 关键修复：centerAz 和 centerEl 是度数，使用时需乘 DEG 转弧度
         const azR = centerAz * DEG + (local.az * DEG - centerAz * DEG) * FORMATION_SCALE;
         const elR = centerEl * DEG + (local.el * DEG - centerEl * DEG) * FORMATION_SCALE;
-        sceneObjects.satelliteMeshes1D[idx].position.set(
+        mesh.position.set(
             displayDist * Math.cos(elR) * Math.sin(azR),
             displayDist * Math.sin(elR),
             -displayDist * Math.cos(elR) * Math.cos(azR)
         );
-    });
-    for (let i = group.sats.length; i < sceneObjects.satelliteMeshes1D.length; i++) {
-        sceneObjects.satelliteMeshes1D[i].visible = false;
     }
-    const visibleCountEl = document.getElementById('visibleCount');
-    const timeDisplayEl = document.getElementById('timeDisplay');
+    
+    for (let i = satCount; i < meshes.length; i++) {
+        meshes[i].visible = false;
+    }
+    
+    const domCache = appState.domCache;
+    const visibleCountEl = domCache ? domCache.get('visibleCount') : document.getElementById('visibleCount');
+    const timeDisplayEl = domCache ? domCache.get('timeDisplay') : document.getElementById('timeDisplay');
     if (visibleCountEl) visibleCountEl.textContent = visibleCount;
     if (timeDisplayEl) timeDisplayEl.textContent = formatTimestamp(group.timestamp);
 
@@ -334,41 +338,22 @@ export function updateMoonFirstPerson(appState) {
         const debugNow = performance.now();
 
         if (!appState.csv.satelliteData || appState.csv.satelliteData.length === 0) {
-            if (debugNow - appState.interpolation.lastMoonLogTime >= 2000) {
-                appState.interpolation.lastMoonLogTime = debugNow;
-                console.warn(`[MOON-CSV] CSV数据为空! currentMode=${currentMode}, 是否已加载CSV文件?`);
-            }
+            log.warn('CSV数据为空');
             return;
         }
 
         const idx = appState.csv.state.currentTimeIdx;
         if (idx < 0 || idx >= appState.csv.satelliteData.length) {
-            if (debugNow - appState.interpolation.lastMoonLogTime >= 2000) {
-                appState.interpolation.lastMoonLogTime = debugNow;
-                console.warn(`[MOON-CSV] 索引越界! idx=${idx}, dataLength=${appState.csv.satelliteData.length}`);
-            }
+            log.warn(`索引越界! idx=${idx}`);
             return;
         }
 
         const frameData = appState.csv.satelliteData[idx];
-        const timestamp = frameData.timestamp;
-
-        // 调试：查看时间戳原始值
-        if (debugNow - appState.interpolation.lastMoonLogTime >= 2000) {
-            appState.interpolation.lastMoonLogTime = debugNow;
-            console.log(`[MOON-TS-DEBUG] idx=${idx}, timestamp=`, timestamp, `, type=${typeof timestamp}, length=${timestamp ? timestamp.length : 'N/A'}`);
-        }
-
-        d = parseTimestamp(timestamp);
+        d = parseTimestamp(frameData.timestamp);
     }
 
     if (!d || isNaN(d.year) || isNaN(d.month) || isNaN(d.day)) {
-        // 调试日志：帮助诊断时间戳问题
-        const nowDebug = performance.now();
-        if (nowDebug - appState.interpolation.lastMoonLogTime >= 2000) {
-            appState.interpolation.lastMoonLogTime = nowDebug;
-            console.warn(`[MOON-FIRST] 时间戳解析失败! d=`, d, `, currentTimeIdx=`, appState.csv.state.currentTimeIdx);
-        }
+        log.warn(`时间戳解析失败!`);
         return;
     }
 
@@ -390,13 +375,11 @@ export function updateMoonFirstPerson(appState) {
     );
     const moonLocal = ecefToLocal(moonEcef.x, moonEcef.y, moonEcef.z, currentLat, currentLon);
 
-    // 每秒输出月球日志
+    // 每秒输出月球日志（简化）
     const now = performance.now();
     if (now - appState.interpolation.lastMoonLogTime >= 1000) {
         appState.interpolation.lastMoonLogTime = now;
-        // 【V2修复】直接格式化日期对象，而不是使用formatTimestamp
-        const timeStr = `${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')} ${String(d.hour).padStart(2,'0')}:${String(d.minute).padStart(2,'0')}:${String(d.second).padStart(2,'0')}`;
-        console.log(`[MOON-FIRST-V2] time=${timeStr}, obs: lat=${currentLat.toFixed(2)}°, lon=${currentLon.toFixed(2)}°, moonLocal: az=${moonLocal.az.toFixed(2)}°, el=${moonLocal.el.toFixed(2)}°, range=${moonLocal.range.toFixed(1)} km`);
+        log.debug(`月球位置: az=${moonLocal.az.toFixed(1)}°, el=${moonLocal.el.toFixed(1)}°, range=${moonLocal.range.toFixed(0)} km`);
     }
 
     // 计算目标位置
@@ -426,7 +409,7 @@ export function updateMoonFirstPerson(appState) {
             moonInterpState.initialized = true;
 
             sceneObjects.moon.position.set(targetPosX, targetPosY, targetPosZ);
-            console.log('[MOON-INTERP] 初始化月球插值状态');
+            log.debug('初始化月球插值状态');
         } else {
             // 获取插值进度（0-1之间）
             const progress = appState.interpolation.currentProgress || 0;
@@ -446,12 +429,6 @@ export function updateMoonFirstPerson(appState) {
                 moonInterpState.targetAz = moonLocal.az;
                 moonInterpState.targetEl = moonLocal.el;
                 moonInterpState.targetRange = moonLocal.range;
-
-                // 每秒输出一次插值状态日志
-                if (now - appState.interpolation.lastMoonInterpLogTime >= 1000) {
-                    appState.interpolation.lastMoonInterpLogTime = now;
-                    console.log(`[MOON-INTERP] 帧切换! progress=${progress.toFixed(3)}, prevEl=${moonInterpState.prevEl.toFixed(2)}°, targetEl=${moonInterpState.targetEl.toFixed(2)}°`);
-                }
             }
 
             // 使用插值进度计算平滑位置
@@ -470,12 +447,6 @@ export function updateMoonFirstPerson(appState) {
             const smoothZ = -smoothDist * Math.cos(smoothElR) * Math.cos(smoothAzR);
 
             sceneObjects.moon.position.set(smoothX, smoothY, smoothZ);
-
-            // 每秒输出一次插值后位置日志
-            if (now - appState.interpolation.lastMoonInterpLogTime >= 1000) {
-                appState.interpolation.lastMoonInterpLogTime = now;
-                console.log(`[MOON-INTERP] progress=${progress.toFixed(3)}, interpProgress=${interpProgress.toFixed(3)}, smoothEl=${smoothEl.toFixed(2)}°, smoothPos=(${smoothX.toFixed(1)}, ${smoothY.toFixed(1)}, ${smoothZ.toFixed(1)})`);
-            }
         }
     } else {
         sceneObjects.moon.visible = false;
@@ -487,70 +458,67 @@ export function updateSatellitesFirstPersonWs(stepData, appState) {
     const { currentLat, currentLon } = appState.interaction;
     const { sceneObjects } = appState;
 
-    // 编队张角放大5倍（与月球保持一致）
     const SCENE_SCALE = RE_3D / RE_KM;
     const FORMATION_SCALE = 5;
 
-    // 第一遍：计算编队中心方向（度数）
-    // 关键修复：使用圆周平均处理360°环绕问题
-    let centerAzSumX = 0, centerAzSumY = 0, centerElSum = 0, validCount = 0;
-    stepData.forEach((satData) => {
+    const meshes = sceneObjects.satelliteMeshes1D;
+    const satCount = stepData.length;
+    
+    // 第一遍：计算编队中心方向
+    let centerAzSumX = 0, centerAzSumY = 0, centerElSum = 0;
+    for (let i = 0; i < satCount; i++) {
+        const satData = stepData[i];
         const ecef = eciToEcef(satData[8], satData[9], satData[10], gmst);
         const local = ecefToLocal(ecef.x, ecef.y, ecef.z, currentLat, currentLon);
-        // 所有卫星都计入（包括地平线下的）
         const azRad = local.az * DEG;
         centerAzSumX += Math.cos(azRad);
         centerAzSumY += Math.sin(azRad);
         centerElSum += local.el;
-        validCount++;
-    });
+    }
+    
     let centerAz = 0, centerEl = 0;
-    if (validCount > 0) {
+    if (satCount > 0) {
         centerAz = Math.atan2(centerAzSumY, centerAzSumX) / DEG;
         if (centerAz < 0) centerAz += 360;
-        centerEl = centerElSum / validCount;
+        centerEl = centerElSum / satCount;
     }
 
     // 第二遍：渲染卫星
     let visibleCount = 0;
-    stepData.forEach((satData, idx) => {
-        if (idx >= sceneObjects.satelliteMeshes1D.length) return;
+    const lightMgr = appState.lightManager;
+    const hasLightMgr = !!lightMgr;
+    
+    for (let idx = 0; idx < satCount && idx < meshes.length; idx++) {
+        const satData = stepData[idx];
+        const mesh = meshes[idx];
+        
         const ecef = eciToEcef(satData[8], satData[9], satData[10], gmst);
         const local = ecefToLocal(ecef.x, ecef.y, ecef.z, currentLat, currentLon);
-        sceneObjects.satelliteMeshes1D[idx].visible = true;
+        mesh.visible = true;
 
-        // 检查灯光状态：如果卫星已开灯，跳过默认颜色设置
-        const lightMgr = appState.lightManager;
-        const isLightOn = lightMgr && lightMgr.getLightState(idx);
-
+        const isLightOn = hasLightMgr && lightMgr.getLightState(idx);
         if (!isLightOn) {
-            // 关灯：使用默认颜色
-            if (local.el >= 0) {
-                sceneObjects.satelliteMeshes1D[idx].material.color.setHex(0x00ff00);
-            } else {
-                sceneObjects.satelliteMeshes1D[idx].material.color.setHex(0xff3333);
-            }
+            mesh.material.color.setHex(local.el >= 0 ? 0x00ff00 : 0xff3333);
         }
-        // 开灯状态：由灯光管理器控制颜色，此处不覆盖
 
-        if (local.el >= 0) {
-            visibleCount++;
-        }
-        // 距离缩小5倍，角度偏移也放大5倍，使卫星分散开
+        if (local.el >= 0) visibleCount++;
+        
         const displayDist = (local.range * SCENE_SCALE) / FORMATION_SCALE;
-        // 关键修复：centerAz 和 centerEl 是度数，使用时需乘 DEG 转弧度
         const azR = centerAz * DEG + (local.az * DEG - centerAz * DEG) * FORMATION_SCALE;
         const elR = centerEl * DEG + (local.el * DEG - centerEl * DEG) * FORMATION_SCALE;
-        sceneObjects.satelliteMeshes1D[idx].position.set(
+        mesh.position.set(
             displayDist * Math.cos(elR) * Math.sin(azR),
             displayDist * Math.sin(elR),
             -displayDist * Math.cos(elR) * Math.cos(azR)
         );
-    });
-    for (let i = stepData.length; i < sceneObjects.satelliteMeshes1D.length; i++) {
-        sceneObjects.satelliteMeshes1D[i].visible = false;
     }
-    const visibleCountEl = document.getElementById('visibleCount');
+    
+    for (let i = satCount; i < meshes.length; i++) {
+        meshes[i].visible = false;
+    }
+    
+    const domCache = appState.domCache;
+    const visibleCountEl = domCache ? domCache.get('visibleCount') : document.getElementById('visibleCount');
     if (visibleCountEl) visibleCountEl.textContent = visibleCount;
 
     // === 更新月球位置 (WS 模式) ===
@@ -586,9 +554,7 @@ export function updateSatellitesFirstPersonWs(stepData, appState) {
 
                 const posX = visualDist * Math.cos(elR) * Math.sin(azR);
                 const posY = visualDist * Math.sin(elR);
-                const posZ = -visualDist * Math.cos(elR) * Math.cos(azR); // 注意 z 的负号
-
-                console.log(`[WS-FIRST] moon visible: az=${moonLocal.az.toFixed(1)}°, el=${moonLocal.el.toFixed(1)}°, dist=${visualDist.toFixed(1)}`);
+                const posZ = -visualDist * Math.cos(elR) * Math.cos(azR);
 
                 sceneObjects.moon.visible = true;
                 sceneObjects.moon.position.set(posX, posY, posZ);

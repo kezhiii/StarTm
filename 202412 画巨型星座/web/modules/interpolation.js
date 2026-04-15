@@ -53,7 +53,7 @@ export function interpolateSatellites(prevData, currData, progress) {
 /**
  * 更新第三视角插值帧
  */
-export function updateSatellitesThirdPersonInterp(interpData, sceneObjects, interaction) {
+export function updateSatellitesThirdPersonInterp(interpData, sceneObjects, interaction, appState) {
     if (!interpData || interpData.length === 0) return;
 
     interpData.forEach((satData, idx) => {
@@ -68,8 +68,9 @@ export function updateSatellitesThirdPersonInterp(interpData, sceneObjects, inte
     for (let i = interpData.length; i < sceneObjects.satelliteMeshes3D.length; i++) {
         sceneObjects.satelliteMeshes3D[i].visible = false;
     }
-    const coordDisplay = document.getElementById('coordDisplay');
-    const timeDisplay = document.getElementById('timeDisplay');
+    const domCache = appState.domCache;
+    const coordDisplay = domCache ? domCache.get('coordDisplay') : document.getElementById('coordDisplay');
+    const timeDisplay = domCache ? domCache.get('timeDisplay') : document.getElementById('timeDisplay');
     if (coordDisplay) coordDisplay.textContent =
         `纬度 ${interaction.currentLat.toFixed(1)}°  经度 ${interaction.currentLon.toFixed(1)}°  时间 ${formatTimestamp(interpData[0][0])}`;
     if (timeDisplay) timeDisplay.textContent = formatTimestamp(interpData[0][0]);
@@ -216,8 +217,9 @@ export function updateSatellitesFirstPersonInterp(interpData, appState) {
     for (let i = interpData.length; i < sceneObjects.satelliteMeshes1D.length; i++) {
         sceneObjects.satelliteMeshes1D[i].visible = false;
     }
-    const visibleCountEl = document.getElementById('visibleCount');
-    const timeDisplay = document.getElementById('timeDisplay');
+    const domCache = appState.domCache;
+    const visibleCountEl = domCache ? domCache.get('visibleCount') : document.getElementById('visibleCount');
+    const timeDisplay = domCache ? domCache.get('timeDisplay') : document.getElementById('timeDisplay');
     if (visibleCountEl) visibleCountEl.textContent = visibleCount;
     if (timeDisplay) timeDisplay.textContent = formatTimestamp(interpData[0][0]);
 
@@ -308,9 +310,10 @@ export function updateSatellitesCenterPersonInterp(interpData, appState, camera,
         updateCameraFn(camera, appState, cameraPanOffset, centerPos);
     }
 
-    const coordDisplay = document.getElementById('coordDisplay');
-    const visibleCountEl = document.getElementById('visibleCount');
-    const timeDisplay = document.getElementById('timeDisplay');
+    const domCache = appState.domCache;
+    const coordDisplay = domCache ? domCache.get('coordDisplay') : document.getElementById('coordDisplay');
+    const visibleCountEl = domCache ? domCache.get('visibleCount') : document.getElementById('visibleCount');
+    const timeDisplay = domCache ? domCache.get('timeDisplay') : document.getElementById('timeDisplay');
     
     if (coordDisplay) coordDisplay.textContent =
         `纬度 ${appState.interaction.currentLat.toFixed(1)}°  经度 ${appState.interaction.currentLon.toFixed(1)}°  时间 ${formatTimestamp(interpData[0][0])}`;

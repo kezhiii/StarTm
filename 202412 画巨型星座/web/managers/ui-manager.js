@@ -183,12 +183,8 @@ export function createUiManager(appState, viewManager, playbackHandlers, orbitRi
 
         // 修复：默认隐藏 CSV 模式控件，因为系统默认运行在 WS 模式
         // 防止页面加载时的 UI 闪烁
-        ['startIdx', 'endIdx', 'timeSlider'].forEach(id => {
-            const el = document.getElementById(id);
-            if (el) el.parentElement.style.display = 'none';
-        });
-        const bar = document.getElementById('time-bar-container');
-        if (bar) bar.style.display = 'none';
+        const timeRangeContainer = document.getElementById('timeRangeContainer');
+        if (timeRangeContainer) timeRangeContainer.style.display = 'none';
 
         // 模式切换按钮 (从 app.js 迁移至此)
         const modeBtn = document.getElementById('modeToggle');

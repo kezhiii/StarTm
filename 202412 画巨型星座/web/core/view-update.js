@@ -23,11 +23,12 @@ export function updateCurrentView(
 
     // 更新时间进度条
     const progress = timeIndices.length > 1 ? (csvState.currentTimeIdx / (timeIndices.length - 1)) * 100 : 0;
-    const bar = document.getElementById('time-bar');
+    const domCache = appState.domCache;
+    const bar = domCache ? domCache.get('time-bar') : document.getElementById('time-bar');
     if (bar) bar.style.width = progress + '%';
 
     // 更新统计面板
-    const statsPanel = document.getElementById('stats-panel');
+    const statsPanel = domCache ? domCache.get('stats-panel') : document.getElementById('stats-panel');
     if (statsPanel && !statsPanel.classList.contains('hidden') && updateModules.updateStatsPanel) {
         updateModules.updateStatsPanel(appState);
     }

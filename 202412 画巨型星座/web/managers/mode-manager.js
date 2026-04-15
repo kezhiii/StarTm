@@ -1,20 +1,10 @@
 // ======================== 模式管理器 ========================
 import { parseTimestamp, dateToJD } from '../modules/math-utils.js';
 
-const DBG = {
-    log: (...a) => console.log('[MODE-MGR]', ...a),
-    warn: (...a) => console.warn('[MODE-MGR]', ...a)
-};
-
 /**
  * 创建模式管理器
  */
 export function createModeManager(appState, viewManager, playbackHandlers) {
-    let currentMode = appState.currentMode;
-    let currentView = appState.currentView;
-    let csvState = appState.csv.state;
-    let wsState = appState.ws;
-
     const { switchView } = viewManager;
     const { startCsvPlayback, stopCsvPlayback, connectWs, stopWs, updateWsStatus } = playbackHandlers;
 
@@ -22,58 +12,72 @@ export function createModeManager(appState, viewManager, playbackHandlers) {
      * 切换到 CSV 模式
      */
     function switchToCsv() {
-        DBG.log('切换到 CSV 模式');
-        currentMode = 'csv';
-        appState.currentMode = 'csv';
-
+        console.log('[MODE-MGR] 切换到 CSV 模式');
+        
+        // 1. 停止 WS 播放和连接
         stopWs();
+        
+        // 2. 清理 WS 状态
+        const wsState = appState.ws;
         if (wsState.connection && wsState.connection.readyState === WebSocket.OPEN) {
+            wsState.connection.onclose = null; // 防止触发重连
             wsState.connection.close();
         }
         wsState.connection = null;
-
-        // 恢复 CSV UI
-        const startIdxEl = document.getElementById('startIdx');
-        const endIdxEl = document.getElementById('endIdx');
-        const timeSliderEl = document.getElementById('timeSlider');
-        const bar = document.getElementById('time-bar-container');
-        const modeToggleEl = document.getElementById('modeToggle');
+        wsState.dataQueue = [];
+        wsState.lastStepData = null;
+        wsState.playbackActive = false;
         
-        if (startIdxEl?.parentElement) startIdxEl.parentElement.style.display = '';
-        if (endIdxEl?.parentElement) endIdxEl.parentElement.style.display = '';
-        if (timeSliderEl?.parentElement) timeSliderEl.parentElement.style.display = '';
-        if (bar) bar.style.display = '';
-        if (modeToggleEl) modeToggleEl.textContent = '🔄 切换到 WS 模式';
+        // 3. 更新模式状态
+        appState.currentMode = 'csv';
+        
+        // 4. 清理插值状态
+        const interpState = appState.interpolation;
+        interpState.prevFrameData = null;
+        interpState.currFrameData = null;
+        interpState.currentInterpData = null;
+        
+        // 5. 恢复 CSV UI
+        const timeRangeContainer = document.getElementById('timeRangeContainer');
+        const modeToggleEl = document.getElementById('modeToggle');
+
+        if (timeRangeContainer) timeRangeContainer.style.display = 'flex';
+        // 修复：按钮显示当前模式，点击后切换到另一模式
+        if (modeToggleEl) modeToggleEl.innerHTML = '<span class="mode-icon">📄</span><span class="mode-text">CSV 回放</span>';
         updateWsStatus();
 
-        // 重建场景
+        // 6. 验证 CSV 数据并重建场景
+        const csvState = appState.csv.state;
         if (appState.csv.satelliteData?.length > 0) {
+            // 确保时间索引有效
             if (csvState.currentTimeIdx < 0 || csvState.currentTimeIdx >= appState.csv.satelliteData.length) {
                 csvState.currentTimeIdx = 0;
             }
 
             const group = appState.csv.satelliteData[csvState.currentTimeIdx];
             if (!group?.sats?.length) {
-                DBG.warn('无卫星数据，切到第三视角');
+                console.warn('[MODE-MGR] 无 CSV 数据，切到第三视角');
                 switchView('third');
                 return;
             }
 
-            // 使用延迟切换确保 WS 循环完全停止
+            // 重置地球自转参数
+            const earthRotationState = appState.earthRotation;
+            const d = parseTimestamp(group.timestamp);
+            earthRotationState.startJD = dateToJD(d.year, d.month, d.day, d.hour, d.minute, d.second);
+            earthRotationState.startTime = performance.now();
+            earthRotationState.speedFactor = 1;
+
+            // 简化切换逻辑：直接切换视角并启动播放
+            const currentView = appState.currentView;
+            switchView(currentView);
+            
+            // 等待视角切换完成后再启动播放
             setTimeout(() => {
-                if (currentView === 'center') {
-                    switchView('third');
-                    setTimeout(() => {
-                        switchView('center');
-                        setTimeout(() => startCsvPlayback(true), 100);
-                    }, 100);
-                } else {
-                    switchView(currentView);
-                    setTimeout(() => startCsvPlayback(true), 100);
-                }
-            }, 200);
+                startCsvPlayback(true);
+            }, 150);
         } else {
-            DBG.warn('无 CSV 数据，切到第三视角');
+            console.warn('[MODE-MGR] 无 CSV 数据，切到第三视角');
             switchView('third');
         }
     }
@@ -82,25 +86,31 @@ export function createModeManager(appState, viewManager, playbackHandlers) {
      * 切换到 WS 模式
      */
     function switchToWs() {
-        DBG.log('切换到 WS 模式');
+        console.log('[MODE-MGR] 切换到 WS 模式');
 
-        // 修复：切换前必须停止 CSV 播放，防止双循环冲突
+        // 1. 停止 CSV 播放
         stopCsvPlayback();
+        
+        // 2. 清理 CSV 播放状态
+        const csvState = appState.csv.state;
+        csvState.isPlaying = false;
+        if (csvState.playbackAnimId) {
+            cancelAnimationFrame(csvState.playbackAnimId);
+            csvState.playbackAnimId = null;
+        }
 
-        currentMode = 'ws';
+        // 3. 更新模式状态
         appState.currentMode = 'ws';
 
-        const startIdxEl = document.getElementById('startIdx');
-        const endIdxEl = document.getElementById('endIdx');
-        const timeSliderEl = document.getElementById('timeSlider');
-        const bar = document.getElementById('time-bar-container');
+        // 4. 隐藏 CSV UI
+        const timeRangeContainer = document.getElementById('timeRangeContainer');
         const modeToggleEl = document.getElementById('modeToggle');
+
+        if (timeRangeContainer) timeRangeContainer.style.display = 'none';
+        // 修复：按钮显示当前模式，点击后切换到另一模式
+        if (modeToggleEl) modeToggleEl.innerHTML = '<span class="mode-icon">📡</span><span class="mode-text">WS 实时</span>';
         
-        if (startIdxEl?.parentElement) startIdxEl.parentElement.style.display = 'none';
-        if (endIdxEl?.parentElement) endIdxEl.parentElement.style.display = 'none';
-        if (timeSliderEl?.parentElement) timeSliderEl.parentElement.style.display = 'none';
-        if (bar) bar.style.display = 'none';
-        if (modeToggleEl) modeToggleEl.textContent = '🔄 切换到 CSV 模式';
+        // 5. 连接 WS 并自动播放
         connectWs(true);
     }
 
@@ -108,16 +118,13 @@ export function createModeManager(appState, viewManager, playbackHandlers) {
         switchToCsv,
         switchToWs,
         onWsConnected: () => {
-            currentMode = 'ws';
             appState.currentMode = 'ws';
-            // UI update is handled by playbackManager/UI manager
             console.log('[MODE-MGR] WS 连接成功');
         },
         onWsDisconnected: () => {
-            currentMode = 'csv';
-            appState.currentMode = 'csv';
+            // WS 断开时不自动切换模式，由用户决定
             console.log('[MODE-MGR] WS 断开');
         },
-        getCurrentMode: () => currentMode
+        getCurrentMode: () => appState.currentMode
     };
 }

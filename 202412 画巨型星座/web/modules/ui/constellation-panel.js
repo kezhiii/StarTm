@@ -244,11 +244,7 @@ export function createConstellationPanel(appState) {
 
         satPositions = satInView;
 
-        satPositions = satInView;
-        console.log(`[CONSTELLATION] 计算得到 ${satInView.length} 颗卫星位置`);
-
         // 绘制卫星
-        console.log(`[CONSTELLATION] 开始绘制 ${satInView.length} 颗卫星`);
         let drawCount = 0;
         
         satInView.forEach((sat, i) => {
@@ -290,15 +286,10 @@ export function createConstellationPanel(appState) {
                 ctx.fillText(idx, x, y);
                 
                 drawCount++;
-                if (i < 3) {
-                    console.log(`[CONSTELLATION] 绘制卫星${idx}: x=${x.toFixed(0)}, y=${y.toFixed(0)}, isLightOn=${isLightOn}`);
-                }
             } catch (e) {
                 console.error(`[CONSTELLATION] 绘制卫星${sat.idx} 失败:`, e.message);
             }
         });
-        
-        console.log(`[CONSTELLATION] 已绘制 ${drawCount}/${satInView.length} 颗卫星`);
 
         // 图例
         ctx.fillStyle = '#ffdd44';

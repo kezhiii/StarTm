@@ -96,10 +96,16 @@
 
         <section class="panel-section">
             <h3 class="section-title">时间轴控制</h3>
-            <!-- 隐藏的时间范围选择器（兼容旧 JS 代码） -->
-            <div style="display:none;">
-                <select id="startIdx"></select>
-                <select id="endIdx"></select>
+            <!-- 时间范围选择器 -->
+            <div class="time-range-container" id="timeRangeContainer" style="display:none;">
+                <div class="time-range-row">
+                    <label class="time-range-label">开始</label>
+                    <select id="startIdx" class="time-range-select"></select>
+                </div>
+                <div class="time-range-row">
+                    <label class="time-range-label">结束</label>
+                    <select id="endIdx" class="time-range-select"></select>
+                </div>
             </div>
             <div class="time-control">
                 <div class="time-display" id="timeDisplay">--:--:--</div>

@@ -3,5 +3,6 @@
     "allow": [
       "Bash(measure-object *)"
     ]
-  }
+  },
+  "$version": 3
 }

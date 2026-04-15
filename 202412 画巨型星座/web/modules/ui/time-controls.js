@@ -70,7 +70,15 @@ export function initTimeControls(appState, playbackController, updateCallbacks) 
     // 时间滑块
     if (slider) {
         slider.addEventListener('input', () => {
-            appState.csv.state.currentTimeIdx = parseInt(slider.value);
+            const newIdx = parseInt(slider.value);
+            const prevIdx = appState.csv.state.currentTimeIdx;
+            appState.csv.state.currentTimeIdx = newIdx;
+            
+            // 调试日志：拖动时间轴
+            const groupData = appState.csv.satelliteData[newIdx];
+            const sat0Pos = groupData && groupData.sats[0] ? `(${groupData.sats[0].X.toFixed(2)}, ${groupData.sats[0].Y.toFixed(2)}, ${groupData.sats[0].Z.toFixed(2)})` : 'null';
+            console.log(`[CSV-DEBUG] 拖动时间轴: prevIdx=${prevIdx} → newIdx=${newIdx}, sat0Pos=${sat0Pos}, prevFrameTimestamp=${appState.interpolation.prevFrameData?.[0]?.[0] || 'null'}, currFrameTimestamp=${appState.interpolation.currFrameData?.[0]?.[0] || 'null'}`);
+            
             if (updateCallbacks.onViewUpdate) {
                 updateCallbacks.onViewUpdate(appState);
             }

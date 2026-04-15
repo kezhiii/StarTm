@@ -36,7 +36,6 @@ export function createLightManager(getSceneObjectsFn) {
             for (let i = 0; i < satCount; i++) {
                 lightStates.set(i, { isOn: false });
             }
-            console.log(`[LIGHT] 已初始化 ${satCount} 颗卫星的灯光状态`);
         },
 
         /**
@@ -91,7 +90,6 @@ export function createLightManager(getSceneObjectsFn) {
          * 全部开灯
          */
         turnAllOn() {
-            console.log(`[LIGHT] 全部开灯 - 开始处理 ${lightStates.size} 颗卫星`);
             lightStates.forEach((state, idx) => {
                 state.isOn = true;
                 this._updateSatelliteLight(idx, true);
@@ -106,7 +104,6 @@ export function createLightManager(getSceneObjectsFn) {
                 state.isOn = false;
                 this._updateSatelliteLight(idx, false);
             });
-            console.log('[LIGHT] 全部关灯');
         },
 
         /**
@@ -125,7 +122,6 @@ export function createLightManager(getSceneObjectsFn) {
             for (let i = 0; i < Math.min(count, indices.length); i++) {
                 this.setLight(indices[i], true);
             }
-            console.log(`[LIGHT] 随机开启 ${count} 颗卫星`);
         },
 
         /**
@@ -163,12 +159,6 @@ export function createLightManager(getSceneObjectsFn) {
             }
             
             const isVisible = mesh.visible;
-            
-            // 调试日志：第一次调用时打印详细信息
-            if (satIdx === 0 && !this._debugLogged) {
-                console.log(`[LIGHT] 更新卫星 0: isOn=${isOn}, visible=${isVisible}, 原始颜色=${mesh.material.color.getHexString()}`);
-                this._debugLogged = true;
-            }
 
             if (isOn) {
                 // 开灯：使用发光材质
@@ -192,11 +182,6 @@ export function createLightManager(getSceneObjectsFn) {
                 } else {
                     mesh.material.color.setHex(LIGHT_CONFIG.offColor.hidden);
                 }
-            }
-            
-            if (satIdx === 0 && !this._debugLogged2) {
-                 console.log(`[LIGHT] 更新后颜色: ${mesh.material.color.getHexString()}, 发光: ${mesh.material.emissive.getHexString()}`);
-                 this._debugLogged2 = true;
             }
         },
 

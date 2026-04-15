@@ -23,12 +23,16 @@ import { createPlaybackManager } from './managers/playback-manager.js';
 import { createInputManager } from './managers/input-manager.js';
 import { createCsvManager } from './managers/csv-manager.js';
 import { createLightManager } from './modules/light-manager.js';
+import { createLogger, loggerConfig, LOG } from './core/logger.js';
 
 // 创建全局状态
 const appState = createState();
 // 将相机和偏移量存入 state，供模块使用
 appState.camera = null;
 appState.cameraPanOffset = null;
+
+// 创建全局日志器
+const log = createLogger('APP');
 
 // 应用上下文（封装 scene, camera, renderer, controls）
 const appCtx = createAppContext();
@@ -62,14 +66,13 @@ let lightManager = null;
 // 卫星编队面板
 let constellationPanel = null;
 
-// ======================== 调试日志辅助 ========================
-// 开发环境输出详细日志，生产环境仅保留警告和错误
-const isDev = typeof process !== 'undefined' && process.env && process.env.NODE_ENV === 'development';
-const DBG = {
-    log: isDev ? (m, ...a) => console.log(`[${m}]`, ...a) : () => {},
-    warn: (m, ...a) => console.warn(`[${m}]`, ...a),
-    error: (m, ...a) => console.error(`[${m}]`, ...a)
-};
+// 全局日志配置（可通过控制台动态修改）
+// 开发模式：loggerConfig.debugMode()
+// 生产模式：loggerConfig.productionMode()
+if (typeof window !== 'undefined') {
+    window.loggerConfig = loggerConfig;
+    window.LOG = LOG;
+}
 
 // ======================== 渲染循环 ========================
 function animate() {
@@ -90,20 +93,12 @@ function animate() {
         updateMoon(appState);
     }
 
-    // 新增：更新第三视角卫星位置（非播放状态下）
+    // 更新第三视角卫星位置（非播放状态下）
+    // 关键修复：暂停状态下不要更新卫星位置，保持当前显示
+    // 只有在首次加载或拖动时间轴时才更新
     if (appState.currentView === 'third' && !csvState.isPlaying && !wsState.playbackActive) {
-        DBG.log('ANIMATE', '更新第三视角卫星, mode=', appState.currentMode, 
-                'csvDataLen=', appState.csv.satelliteData.length, 
-                'wsLastStep=', wsState.lastStepData ? 'exists' : 'null',
-                'timeIdx=', csvState.currentTimeIdx);
-        
-        if (appState.currentMode === 'csv' && appState.csv.satelliteData.length > 0) {
-            updateThirdMod(csvState.currentTimeIdx, appState.csv.satelliteData, appState.sceneObjects, appState.interaction, appState.lightManager);
-        } else if (appState.currentMode === 'ws' && wsState.lastStepData) {
-            updateThirdWsMod(wsState.lastStepData, appState.sceneObjects, appState.interaction, appState.lightManager);
-        } else {
-            DBG.log('ANIMATE', '跳过更新：条件不满足');
-        }
+        // 完全不更新（保持暂停时的位置）
+        // 注意：时间轴拖动会通过 seekToIndex() 单独处理
     }
 
     // 渲染场景
@@ -112,7 +107,7 @@ function animate() {
 
 // ======================== 基础场景 ========================
 function initBaseScene() {
-    DBG.log('SCENE', '初始化 Three.js 场景');
+    log.debug('初始化 Three.js 场景');
     const container = document.getElementById('canvasContainer');
     if (!container) {
         console.error('[APP] 找不到 canvasContainer 元素');
@@ -127,7 +122,7 @@ function initBaseScene() {
 // ======================== 视角切换 ========================
 function switchView(view) {
     if (view === appState.currentView) return;
-    DBG.log('VIEW', `切换到: ${view}, 模式: ${appState.currentMode}, 当前帧索引: ${csvState.currentTimeIdx}`);
+    log.debug(`切换到: ${view}, 模式: ${appState.currentMode}, 当前帧索引: ${csvState.currentTimeIdx}`);
 
     // 0. 更新状态和 UI (最先执行，防止后续 return 跳过)
     appState.currentView = view;
@@ -337,7 +332,7 @@ function updateCurrentView() {
 
 // ======================== 初始化 ========================
 async function init() {
-    DBG.log('INIT', '开始初始化...');
+    log.info('开始初始化...');
     try {
         // 1. 加载纹理
         const textures = await loadTextures();
@@ -428,29 +423,19 @@ async function init() {
         const uiManager = createUiManager(appState, viewManager, playbackHandlers, orbitRingUpdater, modeManager);
         uiManager.initAll();
 
-        // 初始场景
-        console.log('[INIT] 开始初始化第三视角场景');
-        console.log('[INIT] currentMode =', appState.currentMode);
-        console.log('[INIT] csv.satelliteData.length =', appState.csv.satelliteData.length);
-        console.log('[INIT] csv.currentTimeIdx =', csvState.currentTimeIdx);
-        console.log('[INIT] ws.lastStepData =', wsState.lastStepData);
-        
+        // 初始场景（简化日志）
         initThirdPersonSceneMod(appCtx.scene, appCtx.controls, appState);
         appCtx.camera.position.copy(THIRD_PERSON_CAMERA_POS);
         appCtx.controls.target.copy(THIRD_PERSON_CAMERA_TARGET);
         appCtx.controls.update();
-        
-        console.log('[INIT] 第三视角场景初始化完成');
-        console.log('[INIT] sceneObjects.satelliteMeshes3D.length =', appState.sceneObjects.satelliteMeshes3D.length);
-        
-        // 新增：强制更新卫星位置（确保初始化后立即可见）
+
+        // 强制更新卫星位置（确保初始化后立即可见）
         if (appState.csv.satelliteData.length > 0 && csvState.currentTimeIdx >= 0) {
-            console.log('[INIT] 强制更新卫星位置, timeIdx=', csvState.currentTimeIdx);
+            log.debug('强制更新卫星位置, timeIdx=', csvState.currentTimeIdx);
             updateThirdMod(csvState.currentTimeIdx, appState.csv.satelliteData, appState.sceneObjects, appState.interaction, appState.lightManager);
         }
 
-        // 9. 启动 WS 连接
-        console.log('[INIT] 开始清理 WS 状态');
+        // 9. 启动 WS 连接（简化日志）
         if (wsState.connection) {
             if (wsState.connection.readyState !== WebSocket.CLOSED) {
                 wsState.connection.onclose = null;
@@ -462,30 +447,26 @@ async function init() {
         wsState.dataQueue = [];
         wsState.lastStepData = null;
 
-        // 确保重置 CSV 播放状态
         if (csvState.playbackAnimId) {
             cancelAnimationFrame(csvState.playbackAnimId);
             csvState.playbackAnimId = null;
         }
         csvState.isPlaying = false;
-        
-        console.log('[INIT] 开始连接 WebSocket');
 
         try {
             playbackManager.connectWebSocket(true,
                 () => modeManager.onWsConnected(),
                 () => modeManager.onWsDisconnected()
             );
-            console.log('[INIT] WebSocket 连接已启动');
+            log.debug('WebSocket 连接已启动');
         } catch (e) {
-            console.error('[INIT] WebSocket 连接失败:', e);
+            log.error('WebSocket 连接失败:', e);
         }
 
-        console.log('[INIT] 初始化完成, 开始渲染循环');
+        log.info('初始化完成, 开始渲染循环');
         animate();
     } catch (e) {
-        DBG.error('INIT', '初始化失败:', e);
-        console.error('[INIT] 完整错误堆栈:', e.stack);
+        log.error('初始化失败:', e);
         alert('初始化失败: ' + e.message);
     }
 }

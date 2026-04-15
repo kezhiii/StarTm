@@ -191,7 +191,7 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
 
             const currentView = appState.currentView;
             if (currentView === 'third') {
-                updateSatellitesThirdPersonInterp(interpData, appState.sceneObjects, appState.interaction);
+                updateSatellitesThirdPersonInterp(interpData, appState.sceneObjects, appState.interaction, appState);
             } else if (currentView === 'first') {
                 updateSatellitesFirstPersonInterp(interpData, appState);
             } else {
@@ -228,11 +228,27 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
         csvState.currentTimeIdx = newIdx;
 
         const groupData = data[newIdx];
-        interpState.prevFrameData = interpState.currFrameData;
+        
+        // 关键修复：暂停状态下拖动时间轴时，prevFrameData = currFrameData
+        // 否则恢复播放时 prevFrameData 是旧位置（如100），currFrameData 是新位置（如498）
+        // interpolate(data[100], data[498], progress) 会导致卫星跳跃
+        if (csvState.isPlaying) {
+            // 播放中：prevFrameData 保持旧 currFrameData，插值连续
+            interpState.prevFrameData = interpState.currFrameData;
+        } else {
+            // 暂停中：prevFrameData = currFrameData，恢复播放时不跳跃
+            interpState.prevFrameData = null;
+        }
+        
         interpState.currFrameData = groupData.sats.map(sat => [
             groupData.timestamp, sat.sat_id, sat.a, sat.e, sat.i, sat.OMG, sat.omg, sat.f,
             sat.X, sat.Y, sat.Z, sat.Vx, sat.Vy, sat.Vz
         ]);
+        
+        // 暂停状态下，prevFrameData 应该等于 currFrameData
+        if (!csvState.isPlaying) {
+            interpState.prevFrameData = interpState.currFrameData;
+        }
 
         // 重置累加器
         csvPlaybackState.accumulator = 0;
@@ -317,7 +333,7 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
             interpState.currentInterpData = interpData;
 
             if (currentView === 'third') {
-                updateSatellitesThirdPersonInterp(interpData, appState.sceneObjects, appState.interaction);
+                updateSatellitesThirdPersonInterp(interpData, appState.sceneObjects, appState.interaction, appState);
             } else if (currentView === 'first') {
                 updateSatellitesFirstPersonInterp(interpData, appState);
             } else {
@@ -350,7 +366,7 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
             DBG.log(`WS 地球自转参数初始化: startJD=${earthRotationState.startJD.toFixed(4)}`);
             
             // 新增：立即使用队列中的首帧更新视图，避免等待第一帧时的空白期
-            console.log('[WS-PLAYBACK] 立即更新视图, currentView=', appState.currentView, 'queueLen=', wsState.dataQueue.length);
+            // 立即使用队列中的首帧更新视图，避免等待第一帧时的空白期
             const firstFrame = wsState.dataQueue[0];
             if (firstFrame) {
                 if (appState.currentView === 'third') {
@@ -446,9 +462,8 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
                 interpState.currentProgress = progress;
 
                 const currentView = appState.currentView;
-                console.log('[WS-PLAYBACK] 更新视图, currentView=', currentView, 'interpData=', interpData ? interpData[0][0] : 'null');
                 if (currentView === 'third') {
-                    updateSatellitesThirdPersonInterp(interpData, appState.sceneObjects, appState.interaction);
+                    updateSatellitesThirdPersonInterp(interpData, appState.sceneObjects, appState.interaction, appState);
                 } else if (currentView === 'first') {
                     updateSatellitesFirstPersonInterp(interpData, appState);
                 } else {
@@ -662,7 +677,7 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
         const slider = document.getElementById('timeSlider');
         if (slider && appState.currentMode === 'csv') slider.value = csvState.currentTimeIdx;
         const btn = document.getElementById('playBtn');
-        if (btn) btn.textContent = '▶ 播放';
+        if (btn) btn.innerHTML = '<span class="play-icon">▶</span>';
 
         if (appState.currentMode === 'ws' && wsState.connection?.readyState === WebSocket.OPEN) {
             sendWsCmd(wsState.connection, 'pause');
@@ -785,7 +800,7 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
 
                 const currentView = appState.currentView;
                 if (currentView === 'third') {
-                    updateSatellitesThirdPersonInterp(interpData, appState.sceneObjects, appState.interaction);
+                    updateSatellitesThirdPersonInterp(interpData, appState.sceneObjects, appState.interaction, appState);
                 } else if (currentView === 'first') {
                     updateSatellitesFirstPersonInterp(interpData, appState);
                 } else {

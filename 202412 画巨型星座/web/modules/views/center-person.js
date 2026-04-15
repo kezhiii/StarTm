@@ -202,9 +202,10 @@ export function updateSatellitesCenterPerson(timeIdx, appState, camera, cameraPa
         if (sceneObjects.satelliteMeshesCenter[i]) sceneObjects.satelliteMeshesCenter[i].visible = false;
     }
 
-    const coordDisplay = document.getElementById('coordDisplay');
-    const visibleCountEl = document.getElementById('visibleCount');
-    const timeDisplayEl = document.getElementById('timeDisplay');
+    const domCache = appState.domCache;
+    const coordDisplay = domCache ? domCache.get('coordDisplay') : document.getElementById('coordDisplay');
+    const visibleCountEl = domCache ? domCache.get('visibleCount') : document.getElementById('visibleCount');
+    const timeDisplayEl = domCache ? domCache.get('timeDisplay') : document.getElementById('timeDisplay');
     
     if (coordDisplay) coordDisplay.textContent = `纬度 ${appState.interaction.currentLat.toFixed(1)}°  经度 ${appState.interaction.currentLon.toFixed(1)}°  时间 ${formatTimestamp(group.timestamp)}`;
     if (visibleCountEl) visibleCountEl.textContent = visibleCount;
@@ -276,9 +277,10 @@ export function updateSatellitesCenterPersonWs(stepData, appState, camera, camer
         if (sceneObjects.satelliteMeshesCenter[i]) sceneObjects.satelliteMeshesCenter[i].visible = false;
     }
 
-    const coordDisplay = document.getElementById('coordDisplay');
-    const visibleCountEl = document.getElementById('visibleCount');
-    const timeDisplayEl = document.getElementById('timeDisplay');
+    const domCache = appState.domCache;
+    const coordDisplay = domCache ? domCache.get('coordDisplay') : document.getElementById('coordDisplay');
+    const visibleCountEl = domCache ? domCache.get('visibleCount') : document.getElementById('visibleCount');
+    const timeDisplayEl = domCache ? domCache.get('timeDisplay') : document.getElementById('timeDisplay');
     
     if (coordDisplay) coordDisplay.textContent = `纬度 ${appState.interaction.currentLat.toFixed(1)}°  经度 ${appState.interaction.currentLon.toFixed(1)}°  时间 ${formatTimestamp(stepData[0][0])}`;
     if (visibleCountEl) visibleCountEl.textContent = visibleCount;

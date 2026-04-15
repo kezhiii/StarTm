@@ -38,8 +38,6 @@ export function startCsvPlayback(appState, getCurrentViewFn, intervalMsOverride)
 
     // 重置状态
     appState.earthRotation.startTime = performance.now();
-    appState.interpolation.prevFrameData = null;
-    appState.interpolation.currFrameData = null;
     appState.interpolation.currentInterpData = null;
 
     const groupData = data[state.currentTimeIdx];
@@ -52,19 +50,29 @@ export function startCsvPlayback(appState, getCurrentViewFn, intervalMsOverride)
         ]);
     }
 
-    DBG.log(`CSV 播放开始: ${data.length}帧, ${intervalMs}ms/帧`);
+    // 暂停后恢复播放时，prevFrameData = currFrameData
+    // 效果：interpolate(currFrameData, currFrameData, progress) = currFrameData
+    // 第一帧直接显示用户拖动到的位置，不会回退
+    appState.interpolation.prevFrameData = appState.interpolation.currFrameData;
+
+    DBG.log(`CSV 播放开始: timeIdx=${state.currentTimeIdx}, prevFrame=${appState.interpolation.prevFrameData ? appState.interpolation.prevFrameData[0][0] : 'null'}, currFrame=${appState.interpolation.currFrameData ? appState.interpolation.currFrameData[0][0] : 'null'}, accumulator=0`);
+    DBG.log(`[CSV-DEBUG] 播放开始: timeIdx=${state.currentTimeIdx}, prevFrameTimestamp=${appState.interpolation.prevFrameData?.[0]?.[0] || 'null'}, currFrameTimestamp=${appState.interpolation.currFrameData?.[0]?.[0] || 'null'}, sat0Pos=${appState.interpolation.currFrameData ? `(${appState.interpolation.currFrameData[0][8]}, ${appState.interpolation.currFrameData[0][9]}, ${appState.interpolation.currFrameData[0][10]})` : 'null'}`);
 
     let lastFrameTime = performance.now();
     let accumulator = 0;
+    let frameCount = 0;
 
     function playbackLoop(now) {
         if (!state.isPlaying) return;
 
+        frameCount++;
         const delta = now - lastFrameTime;
         lastFrameTime = now;
         accumulator += delta;
 
+        let whileExecuted = false;
         while (accumulator >= intervalMs) {
+            whileExecuted = true;
             accumulator -= intervalMs;
             if (state.currentTimeIdx >= state.endIdx) state.currentTimeIdx = state.startIdx;
             else state.currentTimeIdx++;
@@ -84,16 +92,23 @@ export function startCsvPlayback(appState, getCurrentViewFn, intervalMsOverride)
             if (bar) bar.style.width = (times.length > 1 ? (state.currentTimeIdx / (times.length - 1)) * 100 : 0) + '%';
         }
 
+        const progress = accumulator / intervalMs;
         const interpData = interpolateSatellites(
             appState.interpolation.prevFrameData,
             appState.interpolation.currFrameData,
-            accumulator / intervalMs
+            progress
         );
         appState.interpolation.currentInterpData = interpData;
 
+        // 每帧打印调试信息（前10帧）
+        if (frameCount <= 10) {
+            const sat0Pos = interpData && interpData[0] ? `(${interpData[0][8].toFixed(2)}, ${interpData[0][9].toFixed(2)}, ${interpData[0][10].toFixed(2)})` : 'null';
+            DBG.log(`[CSV-DEBUG] 帧#${frameCount}: delta=${delta.toFixed(1)}ms, acc=${accumulator.toFixed(1)}ms, while=${whileExecuted}, timeIdx=${state.currentTimeIdx}, progress=${progress.toFixed(3)}, sat0Pos=${sat0Pos}`);
+        }
+
         const currentView = getCurrentViewFn();
         if (currentView === 'third') {
-            updateSatellitesThirdPersonInterp(interpData, appState.sceneObjects, appState.interaction);
+            updateSatellitesThirdPersonInterp(interpData, appState.sceneObjects, appState.interaction, appState);
         } else if (currentView === 'first') {
             updateSatellitesFirstPersonInterp(interpData, appState);
         } else {
@@ -125,7 +140,7 @@ export function stopCsvPlayback(appState) {
         cancelAnimationFrame(state.playbackAnimId);
         state.playbackAnimId = null;
     }
-    DBG.log('CSV 播放停止');
+    DBG.log(`[CSV-DEBUG] 暂停: timeIdx=${state.currentTimeIdx}, prevFrameTimestamp=${appState.interpolation.prevFrameData?.[0]?.[0] || 'null'}, currFrameTimestamp=${appState.interpolation.currFrameData?.[0]?.[0] || 'null'}`);
 }
 
 /**
@@ -205,7 +220,7 @@ export function createPlaybackController(appState, getCurrentViewFn) {
             const slider = document.getElementById('timeSlider');
             if (slider && appState.currentMode === 'csv') slider.value = csv.state.currentTimeIdx;
             const playBtn = document.getElementById('playBtn');
-            if (playBtn) playBtn.textContent = '▶ 播放';
+            if (playBtn) playBtn.innerHTML = '<span class="play-icon">▶</span>';
 
             if (appState.currentMode === 'ws' && ws.connection && ws.connection.readyState === WebSocket.OPEN) {
                 wsSendCmdFn?.('pause');

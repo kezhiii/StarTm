@@ -151,7 +151,6 @@ export function createCsvManager(appState, lightManager, constellationPanel) {
             const satCount = appState.csv.satelliteData[0]?.sats?.length || 22;
             if (lightManager) {
                 lightManager.init(satCount);
-                console.log(`[LIGHT] 已初始化 ${satCount} 颗卫星的灯光状态`);
             }
 
             // 更新编队面板
