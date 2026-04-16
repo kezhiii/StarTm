@@ -393,14 +393,14 @@ async function init() {
         // 注意：这里传入最小化的依赖，避免 playbackHandlers 还没定义时的循环引用
         const modeManager = createModeManager(appState, viewManager, {
             stopWs: () => playbackManager.stopWsPlayback(),
-            // 修复：传入停止 CSV 播放的方法，供 switchToWs 调用
             stopCsvPlayback: () => playbackManager.stopCsvPlayback(),
             startCsvPlayback: (reset) => playbackManager.startCsvPlayback(reset),
             updateWsStatus: () => playbackManager.updateWsStatus(appState.ws),
-            // 修复：添加 connectWs 以支持从 CSV 切换回 WS 模式
             connectWs: (auto) => playbackManager.connectWebSocket(auto,
                 () => modeManager.onWsConnected(),
-                () => modeManager.onWsDisconnected())
+                () => modeManager.onWsDisconnected()),
+            pauseWs: () => playbackManager.pauseWs(),
+            resumeWs: () => playbackManager.resumeWs()
         });
 
         // 7. 构建完整的 Handlers

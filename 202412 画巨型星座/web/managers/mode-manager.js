@@ -6,7 +6,7 @@ import { parseTimestamp, dateToJD } from '../modules/math-utils.js';
  */
 export function createModeManager(appState, viewManager, playbackHandlers) {
     const { switchView } = viewManager;
-    const { startCsvPlayback, stopCsvPlayback, connectWs, stopWs, updateWsStatus } = playbackHandlers;
+    const { startCsvPlayback, stopCsvPlayback, connectWs, stopWs, updateWsStatus, resumeWs, pauseWs } = playbackHandlers;
 
     /**
      * 切换到 CSV 模式
@@ -14,19 +14,20 @@ export function createModeManager(appState, viewManager, playbackHandlers) {
     function switchToCsv() {
         console.log('[MODE-MGR] 切换到 CSV 模式');
         
-        // 1. 停止 WS 播放和连接
+        // 1. 停止 WS 播放（不断开连接）
         stopWs();
         
-        // 2. 清理 WS 状态
+        // 2. 发送 PAUSE 命令到后端，保持连接
+        pauseWs();
+        
+        // 3. 保留 WS 前端状态（关键修复：不清空队列，实现无缝恢复）
         const wsState = appState.ws;
-        if (wsState.connection && wsState.connection.readyState === WebSocket.OPEN) {
-            wsState.connection.onclose = null; // 防止触发重连
-            wsState.connection.close();
-        }
-        wsState.connection = null;
-        wsState.dataQueue = [];
+        // wsState.dataQueue = [];  // 删除：不清空队列，保留已有数据
         wsState.lastStepData = null;
         wsState.playbackActive = false;
+        wsState.connectionState = 'paused';
+        updateWsStatus();
+        console.log('[MODE-MGR] 切换到CSV，保留WS队列 ' + wsState.dataQueue.length + ' 帧');
         
         // 3. 更新模式状态
         appState.currentMode = 'csv';
@@ -107,11 +108,19 @@ export function createModeManager(appState, viewManager, playbackHandlers) {
         const modeToggleEl = document.getElementById('modeToggle');
 
         if (timeRangeContainer) timeRangeContainer.style.display = 'none';
-        // 修复：按钮显示当前模式，点击后切换到另一模式
         if (modeToggleEl) modeToggleEl.innerHTML = '<span class="mode-icon">📡</span><span class="mode-text">WS 实时</span>';
         
-        // 5. 连接 WS 并自动播放
-        connectWs(true);
+        // 5. 恢复 WS 连接或新建连接
+        const wsState = appState.ws;
+        if (wsState.connection && wsState.connection.readyState === WebSocket.OPEN) {
+            // 连接仍存在，发送 RESUME 命令恢复数据推送
+            console.log('[MODE-MGR] WS 连接仍存在，发送 RESUME 恢复推送');
+            resumeWs();
+        } else {
+            // 连接已断开，需要重新连接
+            console.log('[MODE-MGR] WS 连接已断开，重新连接');
+            connectWs(true);
+        }
     }
 
     return {

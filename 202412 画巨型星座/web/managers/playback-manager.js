@@ -385,84 +385,120 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
             }
         }
 
-        let lastFrameTime = performance.now();
-        let accumulator = 0;
-        const wsIntervalMs = 1000; // 1秒1帧
-
-        function playbackLoop(now) {
+        // 请求-响应模式：前端驱动，按需请求数据
+        // 启动时已收到10帧，队列≤5帧时请求30帧
+        const REQUEST_THRESHOLD = 5;   // 触发阈值：5帧
+        const REQUEST_COUNT = 30;        // 请求数量：30帧
+        const BASE_INTERVAL = 1000;    // 基础间隔：1.0秒（1fps播放）
+        
+        // 请求后端数据
+        function requestMoreData() {
+            if (wsState.connection && wsState.connection.readyState === WebSocket.OPEN) {
+                const requestMsg = JSON.stringify({
+                    type: 'request_data',
+                    request_count: REQUEST_COUNT
+                });
+                wsState.connection.send(requestMsg);
+                DBG.log(`[WS] 队列剩余${wsState.dataQueue.length}帧≤${REQUEST_THRESHOLD}，请求${REQUEST_COUNT}帧`);
+            }
+        }
+        
+        // 使用递归 setTimeout，固定1秒间隔播放
+        // 关键修复：添加调试日志，监控实际播放速度
+        let lastDebugTime = performance.now();
+        let frameCount = 0;
+        
+        function scheduleNextFrame() {
             if (!wsState.playbackActive) return;
-
-            const delta = now - lastFrameTime;
-            lastFrameTime = now;
-            accumulator += delta;
-
-            // 关键修复：每次只处理1帧，防止批量处理导致跳跃
-            if (accumulator >= wsIntervalMs && wsState.dataQueue.length > 0) {
-                accumulator -= wsIntervalMs;
+            
+            // 调试：监控实际播放速度
+            frameCount++;
+            const now = performance.now();
+            const elapsed = now - lastDebugTime;
+            if (elapsed >= 10000) {  // 每10秒打印一次统计
+                const actualFps = (frameCount / elapsed * 1000).toFixed(2);
+                DBG.log(`[WS-DEBUG] 过去10秒: ${frameCount}帧, 实际FPS: ${actualFps}, 预期FPS: 1.00`);
+                frameCount = 0;
+                lastDebugTime = now;
+            }
+            
+            // 帧消费逻辑
+            if (wsState.dataQueue.length > 0) {
                 const stepData = wsState.dataQueue.shift();
-
+                
                 // 关键诊断：记录帧切换信息
                 if (interpState.currFrameData && stepData) {
                     const prevTime = interpState.currFrameData[0]?.[0] || '?';
                     const currTime = stepData[0]?.[0] || '?';
-                    DBG.log(`帧切换: ${prevTime} → ${currTime}`);
+                    DBG.log(`帧切换: ${prevTime} → ${currTime} (队列${wsState.dataQueue.length}帧)`);
                 }
-
+                
                 interpState.prevFrameData = interpState.currFrameData;
                 interpState.currFrameData = stepData;
                 wsState.lastStepData = stepData;
-
-                // 移除：不要在循环中重复设置地球自转参数
-                // if (earthRotationState.startTime === null && stepData?.length > 0) { ... }
-
+                
+                // 关键修复：帧切换时重置渲染累积器，开始新的插值周期
+                wsState.renderAccumulator = 0;
+                wsState.renderLastTime = performance.now();
+                
                 if (stepData?.length > 0) {
                     const timeDisplay = document.getElementById('timeDisplay');
                     if (timeDisplay) timeDisplay.textContent = formatTimestamp(stepData[0][0]);
                 }
-            }
-            
-            // 关键修复：限制accumulator最大值，防止数据延迟到达时跳跃
-            const maxAccumulator = wsIntervalMs * 3; // 最大3秒
-            if (accumulator > maxAccumulator) {
-                accumulator = maxAccumulator;
-            }
-
-            // 关键修复：队列为空时打印警告并跳过插值，防止progress卡在1.0
-            // 原因：后端暂停/计算中时队列空，accumulator持续增长导致progress=1.0
-            if (wsState.dataQueue.length === 0 && accumulator >= wsIntervalMs) {
-                // 只在首次检测到时打印警告
+                
+                // 队列恢复时清除警告标记
+                if (wsState._queueEmptyWarned) {
+                    DBG.log('WS 数据队列恢复，继续播放');
+                    wsState._queueEmptyWarned = false;
+                }
+                
+                // 关键：队列≤5帧时，主动请求更多数据
+                if (wsState.dataQueue.length <= REQUEST_THRESHOLD) {
+                    requestMoreData();
+                }
+            } else {
+                // 队列为空时，立即请求数据
                 if (!wsState._queueEmptyWarned) {
-                    DBG.warn('WS 数据队列空，等待后端数据...（后端可能正在计算或暂停）');
+                    DBG.warn('WS 数据队列空，立即请求数据...');
                     wsState._queueEmptyWarned = true;
                 }
-                wsState.playbackAnimId = requestAnimationFrame(playbackLoop);
-                return;
+                requestMoreData();
             }
             
-            // 队列恢复时清除警告标记
-            if (wsState.dataQueue.length > 0 && wsState._queueEmptyWarned) {
-                DBG.log('WS 数据队列恢复，继续播放');
-                wsState._queueEmptyWarned = false;
-                // 重置accumulator避免progress突变
-                accumulator = 0;
+            // 调度下一帧（固定1秒间隔）
+            wsState.playbackTimer = setTimeout(scheduleNextFrame, BASE_INTERVAL);
+        }
+        
+        // 启动播放循环（启动时已收到10帧，先播放）
+        scheduleNextFrame();
+        
+        // 动画循环用于插值渲染，基于时间动态计算进度（与CSV模式一致）
+        // 初始化渲染时间追踪变量到 wsState，便于帧切换时重置
+        wsState.renderLastTime = performance.now();
+        wsState.renderAccumulator = 0;
+        const RENDER_INTERVAL = 1000; // 1秒1帧，与播放速率一致
+        
+        function renderLoop(now) {
+            if (!wsState.playbackActive) return;
+            
+            // 计算时间差和累积（使用 wsState 上的变量）
+            const delta = now - wsState.renderLastTime;
+            wsState.renderLastTime = now;
+            wsState.renderAccumulator += delta;
+            
+            // 限制最大值，防止后台切换回来后的突变
+            if (wsState.renderAccumulator > RENDER_INTERVAL * 2) {
+                wsState.renderAccumulator = RENDER_INTERVAL * 2;
             }
             
-            // 修复：不要清理积压数据，让播放循环正常消费
-            // 如果队列过大（>100帧），保留最新100帧
-            if (wsState.dataQueue.length > 100) {
-                DBG.warn(`WS 队列过大: ${wsState.dataQueue.length} 帧，清理到100帧`);
-                while (wsState.dataQueue.length > 100) {
-                    wsState.dataQueue.shift();
-                }
-            }
+            // 计算动态进度 (0-1)
+            const progress = Math.min(wsState.renderAccumulator / RENDER_INTERVAL, 1.0);
 
             if (interpState.currFrameData) {
-                const progress = Math.min(Math.max(accumulator / wsIntervalMs, 0), 1.0);
-
                 const interpData = interpolateSatellites(
                     interpState.prevFrameData,
                     interpState.currFrameData,
-                    progress
+                    progress  // 动态进度，实现平滑插值
                 );
                 interpState.currentInterpData = interpData;
                 interpState.currentProgress = progress;
@@ -475,14 +511,12 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
                 } else {
                     updateSatellitesCenterPersonInterp(interpData, appState, camera, cameraPanOffset, modules.updateCenterPersonCamera);
                 }
-            } else {
-                console.warn('[WS-PLAYBACK] currFrameData 为 null，跳过更新');
             }
 
-            wsState.playbackAnimId = requestAnimationFrame(playbackLoop);
+            wsState.playbackAnimId = requestAnimationFrame(renderLoop);
         }
 
-        wsState.playbackAnimId = requestAnimationFrame(playbackLoop);
+        wsState.playbackAnimId = requestAnimationFrame(renderLoop);
     }
 
     /**
@@ -491,10 +525,97 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
     function stopWsPlayback() {
         DBG.log('WS 停止');
         wsState.playbackActive = false;
+        // 关键修复：清除 requestAnimationFrame 动画循环
         if (wsState.playbackAnimId) {
             cancelAnimationFrame(wsState.playbackAnimId);
             wsState.playbackAnimId = null;
         }
+        // 关键修复：清除 setTimeout 定时器（自适应间隔模式）
+        if (wsState.playbackTimer) {
+            clearTimeout(wsState.playbackTimer);
+            wsState.playbackTimer = null;
+        }
+        // 重置自适应间隔参数
+        wsState.currentInterval = 1000;
+        wsState.highQueueDuration = 0;
+        // 关键修复：重置未统计帧计数器
+        wsState._framesReceivedSinceLastCheck = 0;
+        // 关键修复：重置渲染累积器
+        wsState.renderAccumulator = 0;
+        wsState.renderLastTime = performance.now();
+    }
+
+    /**
+     * 暂停 WS 推送（不断开连接）
+     */
+    function pauseWs() {
+        if (wsState.connection && wsState.connection.readyState === WebSocket.OPEN) {
+            sendWsCmd(wsState.connection, 'pause');
+            DBG.log('WS 暂停推送（保持连接）');
+        }
+    }
+
+    /**
+     * 恢复 WS 推送（复用已有连接）
+     */
+    function resumeWs() {
+        if (wsState.connection && wsState.connection.readyState === WebSocket.OPEN) {
+            sendWsCmd(wsState.connection, 'resume');
+            wsState.connectionState = 'playing';
+            // 关键修复：保留现有队列，不清空，实现无缝恢复
+            // wsState.dataQueue = [];  // 删除：恢复时不清空队列，继续播放已有数据
+            wsState.lastStepData = null;
+            wsState.autoPlayOnConnect = false;
+            // 关键修复：先重置为 false，让 runWsPlayback 能正常启动
+            wsState.playbackActive = false;
+            // updateWsSts(wsState);
+            runWsPlayback();
+            DBG.log('WS 恢复推送（复用连接），保留队列 ' + wsState.dataQueue.length + ' 帧');
+        }
+    }
+
+    /**
+     * 设置页面可见性处理器（后台暂停/前台恢复）
+     */
+    function setupVisibilityHandler() {
+        // 避免重复添加监听
+        if (wsState._visibilityHandlerSetup) {
+            return;
+        }
+        wsState._visibilityHandlerSetup = true;
+        
+        // 后台暂停延迟计时器（10秒）
+        let backgroundPauseTimer = null;
+        const BACKGROUND_PAUSE_DELAY = 10000; // 10秒
+        
+        document.addEventListener('visibilitychange', () => {
+            if (!wsState.connection || wsState.connection.readyState !== WebSocket.OPEN) {
+                return;
+            }
+            
+            if (document.hidden) {
+                // 页面进入后台：启动10秒倒计时
+                console.log('[WS] 页面进入后台，启动10秒暂停倒计时');
+                backgroundPauseTimer = setTimeout(() => {
+                    console.log('[WS] 后台10秒倒计时结束，发送暂停命令');
+                    sendWsCmd(wsState.connection, 'pause');
+                    DBG.log('[WS] 已发送暂停命令（后台10秒后）');
+                }, BACKGROUND_PAUSE_DELAY);
+            } else {
+                // 页面回到前台：取消倒计时（如果还在倒计时中）
+                if (backgroundPauseTimer) {
+                    clearTimeout(backgroundPauseTimer);
+                    backgroundPauseTimer = null;
+                    console.log('[WS] 回到前台，取消暂停倒计时');
+                }
+                // 立即恢复播放
+                console.log('[WS] 页面回到前台，恢复播放');
+                sendWsCmd(wsState.connection, 'resume');
+                DBG.log('[WS] 已发送恢复命令（前台）');
+            }
+        });
+        
+        console.log('[WS] 页面可见性处理器已设置（10秒延迟暂停）');
     }
 
     /**
@@ -537,6 +658,9 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
                 wsState.connectionState = 'buffering';
                 updateWsSts(wsState);
                 onConnected?.();
+                
+                // 关键修复：添加 Page Visibility API 监听，后台时暂停播放
+                setupVisibilityHandler();
             };
 
             wsState.connection.onerror = (error) => {
@@ -546,7 +670,32 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
             wsState.connection.onclose = () => {
                 console.log(`[WS] 连接关闭 (尝试 ${retryCount + 1}/${maxRetries})`);
                 
-                // 新增：如果未达到最大重试次数，则重试
+                // 关键修复：重置所有状态（无论是否重连）
+                console.log('[WS] 重置状态: dataQueue, renderAccumulator, interpState...');
+                wsState.dataQueue = [];
+                wsState.renderAccumulator = 0;
+                wsState.renderLastTime = performance.now();
+                wsState.lastStepData = null;
+                wsState._queueEmptyWarned = false;
+                wsState._visibilityHandlerSetup = false;  // 清理可见性处理器标志
+                
+                // 重置插值状态
+                const interpState = appState.interpolation;
+                interpState.prevFrameData = null;
+                interpState.currFrameData = null;
+                interpState.currentInterpData = null;
+                interpState.currentProgress = 0;
+                
+                // 如果当前不在 WS 模式，不尝试重连
+                if (appState.currentMode !== 'ws') {
+                    console.log('[WS] 当前非 WS 模式，不重连');
+                    wsState.connectionState = 'disconnected';
+                    updateWsSts(wsState);
+                    onDisconnected?.();
+                    return;
+                }
+                
+                // 如果未达到最大重试次数，则重试
                 if (retryCount < maxRetries) {
                     retryCount++;
                     console.log(`[WS] ${retryDelay}ms 后重试... (${retryCount}/${maxRetries})`);
@@ -574,6 +723,7 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
                         DBG.log(`收到首帧数据: ${msg.data.length} 帧, 队列总数: ${wsState.dataQueue.length + msg.data.length}`);
                     }
 
+                    // 请求-响应模式：直接入队，无需复杂计数
                     for (let i = 0; i < msg.data.length; i++) wsState.dataQueue.push(msg.data[i]);
                     while (wsState.dataQueue.length > WS_MAX_QUEUE_SIZE) wsState.dataQueue.shift();
 
@@ -586,17 +736,17 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
                         }
                     }
 
-                    // 关键修复：后端恢复数据时清除队列空警告标记
+                    // 请求-响应模式：收到数据即恢复播放
                     if (wsState._queueEmptyWarned) {
                         DBG.log('WS 数据队列恢复，继续播放');
                         wsState._queueEmptyWarned = false;
                     }
 
-                    // 关键修复：只在首次连接时启动播放，防止重复调用
-                    if (msg.is_first && !wsState.playbackActive && wsState.autoPlayOnConnect) {
+                    // 请求-响应模式：首次连接时启动播放
+                    if (msg.is_first && !wsState.playbackActive) {
                         wsState.connectionState = 'playing';
                         wsState.autoPlayOnConnect = false;
-                        DBG.log('启动 WS 播放循环');
+                        DBG.log(`[WS] 收到首帧${msg.data.length}帧，启动播放循环`);
                         runWsPlayback();
                     }
                     // 移除：不要重复调用runWsPlayback，播放循环已经在运行
@@ -604,9 +754,14 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
                     updateWsSts(wsState);
                 } else if (msg.type === 'command' && msg.cmd === 'paused') {
                     // 处理后端发送的暂停命令
-                    DBG.warn('后端已暂停播放');
-                    wsState.connectionState = 'paused';
-                    updateWsSts(wsState);
+                    // 关键修复：WS 模式下收到 paused 是过期 ACK（竞态条件），忽略
+                    if (appState.currentMode === 'ws') {
+                        DBG.warn('收到过期的暂停确认，忽略（当前已在 WS 模式）');
+                    } else {
+                        DBG.warn('后端已暂停播放');
+                        wsState.connectionState = 'paused';
+                        updateWsSts(wsState);
+                    }
                 } else if (msg.type === 'command' && msg.cmd === 'buffering') {
                     // 处理后端发送的计算中命令
                     DBG.warn('后端正在计算数据...');
@@ -833,6 +988,8 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
         seekToIndex,
         runWsPlayback,
         stopWsPlayback,
+        pauseWs,
+        resumeWs,
         connectWebSocket,
         sendWsCommand: sendWsCmd,
         updateWsStatus: updateWsSts,

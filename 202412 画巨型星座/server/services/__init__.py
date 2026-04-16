@@ -7,9 +7,11 @@
 from .propagation_service import PropagationService
 from .csv_service import CsvService
 from .ws_service import WsService
+from .client_session import ClientSession
 
 __all__ = [
     'PropagationService',
     'CsvService',
     'WsService',
+    'ClientSession',
 ]

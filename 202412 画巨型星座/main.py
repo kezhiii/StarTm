@@ -27,7 +27,7 @@ from server.config import AppConfig, ConstellationSetup
 from server.core import Constellation, PropagationState
 from server.propagators import PerturbedOrbitPropagator
 from server.services import PropagationService, CsvService, WsService
-from server.api import CsvApiHandler, WsConnectionHandler
+from server.api import CsvApiHandler
 from server.core.exceptions import (
     ConfigError,
     ConfigFileNotFoundError,
@@ -79,7 +79,6 @@ class Application:
     def __init__(self, config_path: Optional[str] = None):
         self._config: Optional[AppConfig] = None
         self._csv_service: Optional[CsvService] = None
-        self._propagation_service: Optional[PropagationService] = None
         self._ws_service: Optional[WsService] = None
         self._http_server: Optional[HTTPServer] = None
         self._csv_api_server: Optional[HTTPServer] = None
@@ -131,21 +130,25 @@ class Application:
         propagator = PerturbedOrbitPropagator()
         propagator.warmup_jit()
 
-        self._propagation_service = PropagationService(
-            constellation=constellation,
-            propagator=propagator,
-            buffer_capacity=self._config.propagation.buffer_capacity,
-        )
-        print(f"[App] 递推服务初始化成功: {self._propagation_service}")
-
-        # 5. 创建 WebSocket 服务
+        # 5. 创建 WebSocket 服务（多客户端版本）
+        # 关键修复：每个客户端必须拥有完全独立的 Constellation 对象
+        def create_propagation_service_factory():
+            """为每个 WebSocket 客户端创建独立的传播服务"""
+            # 关键修复：每个客户端独立加载星座数据，避免状态共享
+            client_constellation = Constellation.from_input_files(
+                self._config.get_center_oe_path(),
+                self._config.get_deputy_oe_path()
+            )
+            return PropagationService(
+                constellation=client_constellation,  # 每个客户端独立的星座对象
+                propagator=PerturbedOrbitPropagator(),
+                buffer_capacity=self._config.propagation.buffer_capacity,
+            )
+        
         self._ws_service = WsService(
-            propagation_service=self._propagation_service,
+            propagation_service_factory=create_propagation_service_factory,
             host=self._config.server.ws_host,
             port=self._config.server.ws_port,
-            initial_push_seconds=self._config.propagation.initial_push_seconds,
-            compute_interval=self._config.propagation.compute_interval,
-            push_interval=self._config.propagation.push_interval,
         )
         print(f"[App] WebSocket 服务初始化成功: {self._ws_service}")
 
@@ -205,9 +208,10 @@ class Application:
         print("\n[App] 正在停止服务...")
         self._is_running = False
 
-        # 1. 停止 WebSocket 服务
+        # 1. 停止 WebSocket 服务（多客户端版本）
         if self._ws_service:
-            self._ws_service.propagation_service.stop()
+            # 新架构：WsService 自动管理所有客户端会话
+            asyncio.run_coroutine_threadsafe(self._ws_service.stop(), self._ws_loop)
             print("[App] WebSocket 服务已停止")
 
         # 2. 停止 WebSocket 事件循环
@@ -270,17 +274,19 @@ class Application:
         print(f"[App] CSV API 服务器已启动: http://localhost:{self._config.server.csv_api_port}")
 
     def _start_ws_server(self) -> None:
-        """启动 WebSocket 服务器"""
-        ws_handler = WsConnectionHandler(self._ws_service)
-
+        """启动 WebSocket 服务器（多客户端版本）"""
         def run_ws_loop():
             self._ws_loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self._ws_loop)
             try:
-                self._ws_loop.run_until_complete(ws_handler.run_server())
+                self._ws_loop.run_until_complete(self._ws_service.start())
+                # 保持运行直到停止事件
+                while not self._shutdown_event.is_set():
+                    self._ws_loop.run_until_complete(asyncio.sleep(1))
             except Exception as e:
                 print(f"[App] WebSocket 服务器错误: {e}")
             finally:
+                self._ws_loop.run_until_complete(self._ws_service.stop())
                 self._ws_loop.close()
 
         self._ws_thread = threading.Thread(target=run_ws_loop, daemon=True)
