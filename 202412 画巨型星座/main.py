@@ -130,7 +130,18 @@ class Application:
         propagator = PerturbedOrbitPropagator()
         propagator.warmup_jit()
 
-        # 5. 创建 WebSocket 服务（多客户端版本）
+        # 5. 创建协议日志记录器
+        from server.services.protocol_logger import ProtocolLogger
+        protocol_logger = ProtocolLogger(log_dir="log")
+        
+        # 6. 创建共享星座用于灯光控制（独立于各客户端的递推星座）
+        light_control_constellation = Constellation.from_input_files(
+            self._config.get_center_oe_path(),
+            self._config.get_deputy_oe_path(),
+        )
+        print(f"[App] 灯光控制星座初始化成功: {light_control_constellation}")
+
+        # 7. 创建 WebSocket 服务（多客户端版本）
         # 关键修复：每个客户端必须拥有完全独立的 Constellation 对象
         def create_propagation_service_factory():
             """为每个 WebSocket 客户端创建独立的传播服务"""
@@ -149,6 +160,8 @@ class Application:
             propagation_service_factory=create_propagation_service_factory,
             host=self._config.server.ws_host,
             port=self._config.server.ws_port,
+            constellation=light_control_constellation,
+            protocol_logger=protocol_logger,
         )
         print(f"[App] WebSocket 服务初始化成功: {self._ws_service}")
 

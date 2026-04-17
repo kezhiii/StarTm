@@ -68,6 +68,22 @@ export function connectWebSocket(appState, updateCallbacks, autoPlay = false) {
             return;
         }
         
+        // 处理协议响应
+        if (msg.type === 'protocol_response') {
+            console.log('[WS] 收到协议响应:', msg.cmd, msg.data);
+            if (msg.cmd === 'light_control_ok') {
+                console.log('[WS] constellationPanel:', appState.constellationPanel);
+                if (appState.constellationPanel) {
+                    appState.constellationPanel.handleLightResponse(msg.data);
+                } else {
+                    console.warn('[WS] constellationPanel 未初始化');
+                }
+            } else if (msg.cmd === 'light_control_error') {
+                console.error('[CONSTELLATION] 灯光控制失败:', msg.data);
+            }
+            return;
+        }
+        
         if (msg.type === 'data' && Array.isArray(msg.data) && msg.data.length > 0) {
             // 验证数据格式
             const isValid = msg.data.every(d => Array.isArray(d) && d.length >= 14);

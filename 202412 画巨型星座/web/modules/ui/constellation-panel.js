@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { parseTimestamp, dateToJD, calcGMST, eciToEcef, ecefToLocal } from '../math-utils.js';
 import { DEG, RE_KM, RE_3D } from '../config.js';
+import { createProtocolConfirmBar } from './protocol-confirm-bar.js';
 
 const PANEL_WIDTH = 400;
 const PANEL_HEIGHT = 400;
@@ -15,6 +16,7 @@ export function createConstellationPanel(appState) {
     let ctx = null;
     let satPositions = []; // 存储卫星在面板中的 2D 位置 {x, y, idx}
     let isVisible = false;
+    let confirmBar = null;
 
     /**
      * 初始化面板
@@ -29,7 +31,7 @@ export function createConstellationPanel(appState) {
             left: 50%;
             transform: translate(-50%, -50%);
             width: ${PANEL_WIDTH}px;
-            height: ${PANEL_HEIGHT + 60}px;
+            height: ${PANEL_HEIGHT + 100}px;
             background: rgba(10, 10, 30, 0.95);
             border: 2px solid #4488ff;
             border-radius: 10px;
@@ -68,8 +70,40 @@ export function createConstellationPanel(appState) {
 
         ctx = canvas.getContext('2d');
 
+        // 初始化确认栏
+        confirmBar = createProtocolConfirmBar(appState, {
+            onConfirm: handleConfirmSend,
+            onClear: handleClearSelection,
+        });
+        confirmBar.init(panel);
+
         // 添加到页面
         document.body.appendChild(panel);
+    }
+
+    /**
+     * 处理确认发送
+     */
+    function handleConfirmSend(commands) {
+        if (!appState.ws || !appState.ws.connection || appState.ws.connection.readyState !== WebSocket.OPEN) {
+            console.warn('[CONSTELLATION] WebSocket未连接，无法发送指令');
+            return;
+        }
+
+        const message = JSON.stringify({
+            type: 'protocol_frame',
+            light_commands: commands,
+        });
+
+        appState.ws.connection.send(message);
+        console.log(`[CONSTELLATION] 已发送 ${commands.length} 条灯光控制指令`);
+    }
+
+    /**
+     * 处理清空选择
+     */
+    function handleClearSelection() {
+        render();
     }
 
     /**
@@ -80,7 +114,6 @@ export function createConstellationPanel(appState) {
         panel.style.display = 'flex';
         isVisible = true;
         
-        // 使用 requestAnimationFrame 确保 DOM 更新后再绘制
         requestAnimationFrame(() => {
             render();
         });
@@ -106,17 +139,14 @@ export function createConstellationPanel(appState) {
      * 渲染编队可视化
      */
     function render() {
-        if (!ctx) {
-            console.error('[CONSTELLATION] ctx 为空，无法绘制');
-            return;
-        }
+        if (!ctx) return;
         if (!isVisible) return;
 
         // 清空画布
         ctx.fillStyle = '#0a0a1e';
         ctx.fillRect(0, 0, PANEL_WIDTH, PANEL_HEIGHT);
 
-        // 绘制背景网格（模拟天空）
+        // 绘制背景网格
         ctx.strokeStyle = '#223';
         ctx.lineWidth = 1;
         for (let i = 0; i <= PANEL_WIDTH; i += 40) {
@@ -138,7 +168,6 @@ export function createConstellationPanel(appState) {
         const lightMgr = appState.lightManager;
         if (!lightMgr) return;
 
-        // 获取当前帧的卫星数据
         const currentMode = appState.currentMode;
         let satData = null;
         let gmst = 0;
@@ -167,10 +196,9 @@ export function createConstellationPanel(appState) {
             return;
         }
 
-        // 计算观测者位置（使用当前经纬度）
         const { currentLat, currentLon } = appState.interaction;
 
-        // 第一遍：计算所有卫星的真实方位角和仰角
+        // 计算方位角和仰角
         const rawAngles = [];
         satData.forEach((sat, idx) => {
             try {
@@ -182,7 +210,7 @@ export function createConstellationPanel(appState) {
                 const local = ecefToLocal(ecef.x, ecef.y, ecef.z, currentLat, currentLon);
                 
                 let az = local.az;
-                if (az > 180) az -= 360; // 归一化到 -180~180
+                if (az > 180) az -= 360;
 
                 rawAngles.push({ idx, az, el: local.el });
             } catch (e) {
@@ -192,7 +220,7 @@ export function createConstellationPanel(appState) {
 
         if (rawAngles.length === 0) return;
 
-        // 计算编队边界框
+        // 计算边界框
         let minAz = Infinity, maxAz = -Infinity, minEl = Infinity, maxEl = -Infinity;
         rawAngles.forEach(s => {
             if (s.az < minAz) minAz = s.az;
@@ -206,27 +234,21 @@ export function createConstellationPanel(appState) {
         let spanAz = maxAz - minAz;
         let spanEl = maxEl - minEl;
 
-        // Handle Tiny Spans
         if (spanAz < 0.0001) spanAz = 0.0001;
         if (spanEl < 0.0001) spanEl = 0.0001;
 
-        // 关键修复：应用与 3D 场景相同的 Formation Scale (放大5倍)
-        // 使面板上的卫星分布与第一视角下看到的视觉效果一致
         const FORMATION_SCALE = 5;
         spanAz *= FORMATION_SCALE;
         spanEl *= FORMATION_SCALE;
 
-        // Uniform Zoom (Preserve Aspect Ratio)
         const maxSpan = Math.max(spanAz, spanEl);
         const PADDING = 20;
-        const viewSpan = maxSpan * 1.15; // 15% 边距
-        const scale = (PANEL_WIDTH / 2 - PADDING) / (viewSpan / 2); // 像素/度
+        const viewSpan = maxSpan * 1.15;
+        const scale = (PANEL_WIDTH / 2 - PADDING) / (viewSpan / 2);
 
         const satInView = [];
 
-        // Map Coordinates
         rawAngles.forEach(s => {
-            // 同样放大偏移量
             const offsetAz = (s.az - centerAz) * FORMATION_SCALE;
             const offsetEl = (s.el - centerEl) * FORMATION_SCALE;
             
@@ -238,22 +260,50 @@ export function createConstellationPanel(appState) {
                 idx: s.idx,
                 az: s.az,
                 el: s.el,
-                isLightOn: lightMgr.getLightState(s.idx) || false
+                isLightOn: lightMgr.getLightState(s.idx) || false,
+                pendingCommand: confirmBar ? confirmBar.getPendingCommand(s.idx) : null,
             });
         });
 
         satPositions = satInView;
 
         // 绘制卫星
-        let drawCount = 0;
-        
-        satInView.forEach((sat, i) => {
+        satInView.forEach((sat) => {
             try {
-                const { x, y, idx, isLightOn } = sat;
+                const { x, y, idx, isLightOn, pendingCommand } = sat;
                 const radius = 12;
 
-                // 发光效果（开灯时）
-                if (isLightOn) {
+                // 确定显示状态
+                let fillColor, strokeColor, textColor, isPending;
+                
+                if (pendingCommand === 'on') {
+                    // 待开灯：黄色（无论当前状态）
+                    fillColor = '#ffdd44';
+                    strokeColor = '#ffaa00';
+                    textColor = '#000';
+                    isPending = true;
+                } else if (pendingCommand === 'off') {
+                    // 待关灯：绿色（无论当前状态）
+                    fillColor = '#2a4a3a';
+                    strokeColor = '#00ff00';
+                    textColor = '#fff';
+                    isPending = true;
+                } else if (isLightOn) {
+                    // 当前已开灯：黄色
+                    fillColor = '#ffdd44';
+                    strokeColor = '#ffaa00';
+                    textColor = '#000';
+                    isPending = false;
+                } else {
+                    // 当前未开灯：绿色
+                    fillColor = '#2a4a3a';
+                    strokeColor = '#00ff00';
+                    textColor = '#fff';
+                    isPending = false;
+                }
+
+                // 发光效果（开灯或待开灯时）
+                if (isLightOn || pendingCommand === 'on') {
                     const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius * 2);
                     gradient.addColorStop(0, 'rgba(255, 221, 68, 0.8)');
                     gradient.addColorStop(0.5, 'rgba(255, 221, 68, 0.3)');
@@ -264,28 +314,32 @@ export function createConstellationPanel(appState) {
                     ctx.fill();
                 }
 
+                // 待发送标记（虚线边框）
+                if (isPending) {
+                    ctx.beginPath();
+                    ctx.arc(x, y, radius + 3, 0, Math.PI * 2);
+                    ctx.strokeStyle = '#ffffff';
+                    ctx.lineWidth = 2;
+                    ctx.setLineDash([4, 4]);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                }
+
                 // 卫星圆圈
                 ctx.beginPath();
                 ctx.arc(x, y, radius, 0, Math.PI * 2);
-                if (isLightOn) {
-                    ctx.fillStyle = '#ffdd44';
-                    ctx.strokeStyle = '#ffaa00';
-                } else {
-                    ctx.fillStyle = '#2a4a3a';
-                    ctx.strokeStyle = '#00ff00';
-                }
+                ctx.fillStyle = fillColor;
                 ctx.fill();
                 ctx.lineWidth = 2;
+                ctx.strokeStyle = strokeColor;
                 ctx.stroke();
 
                 // 卫星编号
-                ctx.fillStyle = isLightOn ? '#000' : '#fff';
+                ctx.fillStyle = textColor;
                 ctx.font = 'bold 11px Arial';
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
                 ctx.fillText(idx, x, y);
-                
-                drawCount++;
             } catch (e) {
                 console.error(`[CONSTELLATION] 绘制卫星${sat.idx} 失败:`, e.message);
             }
@@ -313,7 +367,7 @@ export function createConstellationPanel(appState) {
         ctx.fillText('关灯', 125, PANEL_HEIGHT - 30);
 
         ctx.fillStyle = '#888';
-        ctx.fillText('点击卫星切换灯光状态', 200, PANEL_HEIGHT - 30);
+        ctx.fillText('点击卫星选择/取消', 220, PANEL_HEIGHT - 30);
     }
 
     /**
@@ -324,33 +378,68 @@ export function createConstellationPanel(appState) {
         const mouseX = event.clientX - rect.left;
         const mouseY = event.clientY - rect.top;
 
-        // 查找点击的卫星
         for (const sat of satPositions) {
             const dist = Math.sqrt((mouseX - sat.x) ** 2 + (mouseY - sat.y) ** 2);
-            if (dist <= 15) { // 15 是点击半径
-                // 切换灯光状态
-                const lightMgr = appState.lightManager;
-                if (lightMgr) {
-                    const newState = lightMgr.toggleLight(sat.idx);
-                    render(); // 重新渲染
-                    
-                    // 同步左侧面板复选框
-                    if (appState.satLightControls) {
-                        appState.satLightControls.syncUI();
-                    }
+            if (dist <= 15) {
+                // 切换待发送指令
+                const currentLight = appState.lightManager ? appState.lightManager.getLightState(sat.idx) : false;
+                const pending = confirmBar ? confirmBar.getPendingCommand(sat.idx) : null;
+                
+                if (pending) {
+                    // 已选中，取消选择
+                    confirmBar.toggleCommand(sat.idx, pending);
+                } else {
+                    // 未选中，根据当前灯光状态决定目标
+                    const targetCommand = currentLight ? 'off' : 'on';
+                    confirmBar.toggleCommand(sat.idx, targetCommand);
                 }
+                
+                render();
                 return;
             }
         }
     }
 
     /**
-     * 在动画循环中更新面板（可选）
+     * 更新面板
      */
     function update() {
         if (isVisible) {
             render();
         }
+    }
+
+    /**
+     * 接收后端响应，更新灯光状态
+     */
+    function handleLightResponse(data) {
+        console.log('[CONSTELLATION] handleLightResponse 被调用:', data);
+        if (!data || !data.results) {
+            console.warn('[CONSTELLATION] 数据格式错误:', data);
+            return;
+        }
+        
+        const lightMgr = appState.lightManager;
+        if (!lightMgr) {
+            console.warn('[CONSTELLATION] lightManager 未初始化');
+            return;
+        }
+
+        data.results.forEach(r => {
+            if (r.success) {
+                console.log(`[CONSTELLATION] 更新卫星${r.sat_id} 灯光: ${r.light_state}`);
+                lightMgr.setLight(r.sat_id, r.light_state);
+            } else {
+                console.warn(`[CONSTELLATION] 卫星${r.sat_id} 控制失败:`, r.error);
+            }
+        });
+
+        // 清空确认栏
+        if (confirmBar) {
+            confirmBar.clear();
+        }
+
+        render();
     }
 
     return {
@@ -360,6 +449,8 @@ export function createConstellationPanel(appState) {
         toggle,
         render,
         update,
-        getPanel: () => panel
+        getPanel: () => panel,
+        getConfirmBar: () => confirmBar,
+        handleLightResponse,
     };
 }

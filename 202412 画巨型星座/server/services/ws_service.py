@@ -59,6 +59,8 @@ class WsService:
         propagation_service_factory: Callable[[], PropagationService],
         host: str = "0.0.0.0",
         port: int = 8765,
+        constellation=None,
+        protocol_logger=None,
     ):
         self._service_factory = propagation_service_factory
         self._host = host
@@ -67,6 +69,8 @@ class WsService:
         self._is_running = False
         self._server = None
         self._stats = ServerStats()
+        self._constellation = constellation
+        self._protocol_logger = protocol_logger
         
     @property
     def is_running(self) -> bool:
@@ -171,6 +175,8 @@ class WsService:
             client_id=client_id,
             websocket=websocket,
             propagation_service_factory=self._service_factory,
+            constellation=self._constellation,
+            protocol_logger=self._protocol_logger,
         )
         self._clients[client_id] = session
         

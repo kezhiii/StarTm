@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 import asyncio
+import base64
 import json
 import time
 from typing import Optional, Callable, Any, List
@@ -51,6 +52,8 @@ class ClientSession:
         client_id: str,
         websocket: Any,
         propagation_service_factory: Callable[[], PropagationService],
+        constellation=None,
+        protocol_logger=None,
     ):
         self.client_id = client_id
         self.websocket = websocket
@@ -58,6 +61,9 @@ class ClientSession:
         self.push_task: Optional[asyncio.Task] = None
         self.is_active = True
         self.stats = SessionStats()
+        self._constellation = constellation
+        self._protocol_logger = protocol_logger
+        self._frame_counter = 0
         
     async def start(self) -> None:
         """启动会话"""
@@ -133,7 +139,12 @@ class ClientSession:
             cmd = json.loads(msg)
             msg_type = cmd.get("type")
             
-            if msg_type == "request_data":
+            if msg_type == "protocol_frame":
+                if "light_commands" in cmd:
+                    await self._handle_light_batch_command(cmd)
+                else:
+                    await self._handle_protocol_frame(cmd)
+            elif msg_type == "request_data":
                 await self._handle_request_data(cmd)
             elif msg_type == "pause":
                 self.service.pause()
@@ -219,6 +230,205 @@ class ClientSession:
             self.stats.last_activity = time.time()
         except Exception as e:
             print(f"[Client {self.client_id}] 发送命令失败: {e}")
+
+    async def _handle_protocol_frame(self, cmd: dict) -> None:
+        """处理协议帧消息"""
+        from ..protocol import LDPCCodec
+        from ..services.protocol_handler import ProtocolHandler
+        from ..services.light_control import LightControlService
+        from ..services.verify_service import VerifyService
+        
+        try:
+            frame_data = cmd.get("frame")
+            use_ldpc = cmd.get("use_ldpc", True)
+            
+            if not frame_data:
+                await self._send_command_response("error", "No frame data provided")
+                return
+            
+            raw_bytes = base64.b64decode(frame_data)
+            
+            if not hasattr(self, '_protocol_handler'):
+                light_service = LightControlService()
+                verify_service = VerifyService(num_satellites=light_service._num_satellites)
+                self._protocol_handler = ProtocolHandler(
+                    light_service, verify_service=verify_service, logger=self._protocol_logger
+                )
+                self._light_service = light_service
+                self._verify_service = verify_service
+            
+            if use_ldpc:
+                result = self._protocol_handler.handle_ldpc_frame(raw_bytes)
+            else:
+                result = self._protocol_handler.handle_frame(raw_bytes)
+            
+            if result["success"]:
+                await self._send_command_response("light_control_ok", result)
+                print(f"[Client {self.client_id}] 灯光控制成功: {result}")
+            else:
+                await self._send_command_response("light_control_error", result)
+                print(f"[Client {self.client_id}] 灯光控制失败: {result}")
+                
+        except Exception as e:
+            print(f"[Client {self.client_id}] 协议帧处理异常: {e}")
+            await self._send_command_response("error", str(e))
+
+    async def _handle_light_batch_command(self, cmd: dict) -> None:
+        """处理批量灯光控制指令"""
+        from ..services.protocol_handler import ProtocolHandler
+        from ..services.light_control import LightControlService
+        from ..services.verify_service import VerifyService
+        from ..services.neighbor_finder import NeighborFinder
+        
+        try:
+            commands = cmd.get("light_commands", [])
+            if not commands:
+                await self._send_command_response("error", "No light commands provided")
+                return
+            
+            if self._protocol_logger:
+                raw_frame = base64.b64encode(b"batch_command").decode('ascii')
+                self._protocol_logger.log_sent(raw_frame, commands, client_addr=self.client_id)
+            
+            if not hasattr(self, '_protocol_handler'):
+                light_service = LightControlService()
+                verify_service = VerifyService(num_satellites=light_service._num_satellites)
+                self._protocol_handler = ProtocolHandler(
+                    light_service, verify_service=verify_service, logger=self._protocol_logger
+                )
+                self._light_service = light_service
+                self._verify_service = verify_service
+            
+            neighbor_map = {}
+            if self._constellation:
+                try:
+                    finder = NeighborFinder(neighbor_count=2)
+                    neighbor_map = finder.find_neighbors_from_constellation(
+                        self._constellation, neighbor_count=2
+                    )
+                    self._verify_service.set_neighbor_map(neighbor_map)
+                    print(f"[Client {self.client_id}] 邻居拓扑: {neighbor_map}")
+                except Exception as e:
+                    print(f"[Client {self.client_id}] 邻居计算失败: {e}")
+            
+            self._frame_counter += 1
+            ldpc_bytes = self._protocol_handler.build_light_control_frame(
+                commands,
+                frame_count=self._frame_counter,
+                packet_id=self._frame_counter,
+                neighbor_map=neighbor_map,
+            )
+            
+            if self._constellation:
+                results = self._constellation.apply_light_control(commands)
+                
+                for cmd_item in commands:
+                    sat_id = cmd_item.get("sat_id", 0)
+                    command = cmd_item.get("command", "").lower()
+                    if sat_id in neighbor_map:
+                        for msg_idx, msg in enumerate(self._protocol_handler._codec._G if hasattr(self._protocol_handler._codec, '_G') else []):
+                            pass
+                        self._verify_service.store_submessages(
+                            sat_id,
+                            self._build_submessages_for_sat(sat_id, commands, neighbor_map),
+                        )
+                
+                verify_results = {}
+                for cmd_item in commands:
+                    sat_id = cmd_item.get("sat_id", 0)
+                    neighbors = neighbor_map.get(sat_id, [])
+                    if neighbors:
+                        verify_results[sat_id] = {
+                            "neighbors": neighbors,
+                            "status": "skip",
+                        }
+                
+                if self._protocol_logger:
+                    self._protocol_logger.log_result(
+                        all(r.get("success") for r in results),
+                        {"results": results, "neighbors": neighbor_map, "verify": verify_results},
+                    )
+                
+                await self._send_command_response("light_control_ok", {
+                    "type": "light_control",
+                    "results": results,
+                    "neighbor_map": neighbor_map,
+                    "verify": verify_results,
+                })
+                print(f"[Client {self.client_id}] 批量灯光控制成功: {len(results)}颗卫星, 邻居: {neighbor_map}")
+            else:
+                await self._send_command_response("error", "Constellation not available")
+                
+        except Exception as e:
+            print(f"[Client {self.client_id}] 批量灯光控制异常: {e}")
+            if self._protocol_logger:
+                self._protocol_logger.log_error("batch_command_error", str(e), self.client_id)
+            await self._send_command_response("error", str(e))
+    
+    def _build_submessages_for_sat(
+        self,
+        sat_id: int,
+        commands: list,
+        neighbor_map: dict,
+    ) -> list:
+        """为指定卫星构建子消息列表（自身+邻星）"""
+        from ..protocol import SubMessage
+        from ..protocol.constants import LightCommand
+        
+        messages = []
+        msg_counter = 0
+        
+        for cmd in commands:
+            cmd_sat_id = cmd.get("sat_id", 0)
+            if cmd_sat_id == sat_id:
+                command = cmd.get("command", "").lower()
+                if command == "on":
+                    data = bytes([LightCommand.TURN_ON, LightCommand.STATE_ON])
+                elif command == "off":
+                    data = bytes([LightCommand.TURN_OFF, LightCommand.STATE_OFF])
+                else:
+                    continue
+                messages.append(SubMessage(
+                    msg_id=msg_counter,
+                    dest_id=cmd_sat_id,
+                    data=data,
+                ))
+                msg_counter += 1
+        
+        if sat_id in neighbor_map:
+            for neighbor_id in neighbor_map[sat_id]:
+                neighbor_cmd = next(
+                    (c for c in commands if c.get("sat_id") == neighbor_id),
+                    None
+                )
+                if neighbor_cmd:
+                    n_command = neighbor_cmd.get("command", "").lower()
+                    if n_command == "on":
+                        n_data = bytes([LightCommand.TURN_ON, LightCommand.STATE_ON])
+                    elif n_command == "off":
+                        n_data = bytes([LightCommand.TURN_OFF, LightCommand.STATE_OFF])
+                    else:
+                        continue
+                    messages.append(SubMessage(
+                        msg_id=msg_counter,
+                        dest_id=neighbor_id,
+                        data=n_data,
+                    ))
+                    msg_counter += 1
+        
+        return messages
+
+    async def _send_command_response(self, cmd: str, data: Any) -> None:
+        """发送命令响应"""
+        try:
+            message = json.dumps({
+                "type": "protocol_response",
+                "cmd": cmd,
+                "data": data,
+            })
+            await self.websocket.send(message)
+        except Exception as e:
+            print(f"[Client {self.client_id}] 发送响应失败: {e}")
             
     def get_stats(self) -> dict:
         """获取会话统计信息"""

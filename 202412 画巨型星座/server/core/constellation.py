@@ -170,5 +170,51 @@ class Constellation:
         for sat, state in zip(self.satellites, states):
             sat.update_inertial_state(state)
     
+    def apply_light_control(self, commands: list) -> list:
+        """
+        批量应用灯光控制指令。
+        
+        Args:
+            commands: [{"sat_id": 0, "command": "on"}, {"sat_id": 3, "command": "off"}, ...]
+        
+        Returns:
+            [{"sat_id": 0, "success": True, "light_state": True}, ...]
+        """
+        results = []
+        for cmd in commands:
+            sat_id = cmd.get("sat_id")
+            command = cmd.get("command", "").lower()
+            
+            sat = self.get_satellite(sat_id)
+            if sat is None:
+                results.append({
+                    "sat_id": sat_id,
+                    "success": False,
+                    "error": f"Satellite {sat_id} not found",
+                })
+                continue
+            
+            if command == "on":
+                sat.light_state = True
+            elif command == "off":
+                sat.light_state = False
+            else:
+                results.append({
+                    "sat_id": sat_id,
+                    "success": False,
+                    "error": f"Unknown command: {command}",
+                })
+                continue
+            
+            results.append({
+                "sat_id": sat_id,
+                "success": True,
+                "light_state": sat.light_state,
+            })
+            
+            print(f"[Constellation] 卫星{sat_id} 灯光: {'开' if sat.light_state else '关'}")
+        
+        return results
+    
     def __repr__(self) -> str:
         return f"Constellation(name={self.name!r}, satellites={self.sat_count})"

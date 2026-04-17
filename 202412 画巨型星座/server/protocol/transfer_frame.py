@@ -386,6 +386,43 @@ class TransferFrame:
             payload_len += 10 + msg.data_length  # 10字节固定 + 数据长度
         return 4 + 12 + 2 + payload_len + 4  # Sync(4) + Header(12) + Packet_Length(2) + Payload + CRC(4)
 
+    def to_ldpc_bytes(self, codec: Optional['LDPCCodec'] = None) -> bytes:
+        """
+        序列化为LDPC编码的字节
+        
+        Args:
+            codec: LDPC编解码器，None则使用默认配置
+            
+        Returns:
+            LDPC编码后的完整帧数据
+        """
+        if codec is None:
+            from .ldpc_codec import LDPCCodec
+            codec = LDPCCodec()
+        frame_bytes = self.to_bytes()
+        return codec.encode(frame_bytes)
+    
+    @classmethod
+    def from_ldpc_bytes(cls, ldpc_data: bytes, codec: Optional['LDPCCodec'] = None) -> "TransferFrame":
+        """
+        从LDPC编码数据解析传输帧
+        
+        Args:
+            ldpc_data: LDPC编码的字节数据
+            codec: LDPC编解码器，None则使用默认配置
+            
+        Returns:
+            解析后的TransferFrame对象
+            
+        Raises:
+            ValueError: LDPC解码失败或帧解析失败
+        """
+        if codec is None:
+            from .ldpc_codec import LDPCCodec
+            codec = LDPCCodec()
+        frame_bytes = codec.decode(ldpc_data)
+        return cls.from_bytes(frame_bytes)
+
     def __repr__(self) -> str:
         """返回传输帧的字符串表示"""
         return (

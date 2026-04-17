@@ -714,6 +714,16 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
                 let msg;
                 try { msg = JSON.parse(event.data); } catch (e) { DBG.error('解析失败:', e); return; }
 
+                // 处理协议响应（灯光控制）
+                if (msg.type === 'protocol_response') {
+                    if (msg.cmd === 'light_control_ok' && appState.constellationPanel) {
+                        appState.constellationPanel.handleLightResponse(msg.data);
+                    } else if (msg.cmd === 'light_control_error') {
+                        DBG.error('[CONSTELLATION] 灯光控制失败:', msg.data);
+                    }
+                    return;
+                }
+
                 if (msg.type === 'data' && Array.isArray(msg.data) && msg.data.length > 0) {
                     const isValid = msg.data.every(d => Array.isArray(d) && d.length >= 14);
                     if (!isValid) { DBG.warn('格式错误'); return; }
