@@ -55,3 +55,54 @@ class ProtocolLog(SQLModel, table=True):
     result_details: Optional[dict] = Field(default=None, sa_column=Column(JSON), description="执行结果详情")
 
     session_id: Optional[str] = Field(default=None, index=True, max_length=128, description="会话 ID")
+
+
+class Satellite(SQLModel, table=True):
+    """
+    卫星基本信息表
+
+    存储卫星的轨道根数、物理属性和运行时状态。
+    数据库作为太空卫星的数据源，启动时加载到内存，运行时双向同步。
+    """
+    __tablename__ = "satellites"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    sat_id: int = Field(unique=True, index=True, description="卫星编号（0-based）")
+
+    # 轨道根数 (Keplerian elements)
+    semi_major_axis: float = Field(description="半长轴 a (m)")
+    eccentricity: float = Field(description="偏心率 e")
+    inclination: float = Field(description="倾角 i (rad)")
+    raan: float = Field(description="升交点赤经 Ω (rad)")
+    argument_of_perigee: float = Field(description="近地点幅角 ω (rad)")
+    true_anomaly: float = Field(description="真近点角 f (rad)")
+
+    # 物理属性
+    mass: float = Field(default=300.0, description="质量 (kg)")
+    cross_section: float = Field(default=0.785, description="横截面积 (m²)")
+    drag_coefficient: float = Field(default=2.2, description="阻力系数")
+
+    # 星座位置
+    plane_index: int = Field(description="轨道面编号")
+    slot_index: int = Field(description="轨道面内槽位编号")
+
+    # 运行时状态
+    light_state: bool = Field(default=False, description="灯光状态（True=开灯, False=关灯）")
+
+    created_at: datetime = Field(default_factory=datetime.utcnow, description="创建时间")
+    updated_at: datetime = Field(default_factory=datetime.utcnow, description="更新时间")
+
+
+class SatelliteNeighbor(SQLModel, table=True):
+    """
+    卫星邻星关系表
+
+    存储卫星间的邻星关系，支持不对称关系（A的邻居是B不代表B的邻居是A）。
+    距离基于实时轨道根数计算，定期更新。
+    """
+    __tablename__ = "satellite_neighbors"
+
+    sat_id: int = Field(primary_key=True, foreign_key="satellites.sat_id", description="卫星编号")
+    neighbor_id: int = Field(primary_key=True, foreign_key="satellites.sat_id", description="邻星编号")
+    distance_km: float = Field(description="计算时的距离 (km)")
+    calculated_at: datetime = Field(default_factory=datetime.utcnow, description="计算时间")

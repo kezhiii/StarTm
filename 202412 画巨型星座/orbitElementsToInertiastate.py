@@ -1,11 +1,9 @@
 import numpy as np
 
-from numba import jit
 #OrbitElements：输入量，轨道根数：a,e,qji,OMG,omg,f  （m,rad）
 #InertiaState:输出量，惯性坐标位置和速度x,y,z,vx,vy,vz
 #!把轨道根数转换为惯性坐标系下的状态
 
-@jit
 def OrbitElementsToInertiastate(OrbitElements: np.ndarray):
     
     MU = 3.986004415e14     #地球引力场数（m^3/s^2)

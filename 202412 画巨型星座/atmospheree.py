@@ -1,6 +1,5 @@
 import numpy as np
-from numba import jit,float64
-@jit(float64(float64))
+
 def atmosphere(z):
     """
     由海平面海拔(km)计算大气密度(kg/m^3)

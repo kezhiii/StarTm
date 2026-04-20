@@ -1,6 +1,5 @@
 import numpy as np
-from numba import jit
-@jit
+
 def solar_position(JD):
     """
     计算太阳的地心赤道位置向量，给定儒略日期 (JD)。

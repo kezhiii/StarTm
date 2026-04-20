@@ -1,6 +1,5 @@
 import numpy as np
-from numba import jit
-@jit
+
 def lunar_position(JD):
     # Earth's radius (m)
     RE = 6.378137e6

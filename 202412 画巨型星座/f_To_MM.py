@@ -1,7 +1,5 @@
 import numpy as np
-from numba import jit
 #!真近点角f转换为平近点角M
-@jit
 def f_To_M(e,f):
     # 计算偏近点角 E
     E = 2 * np.arctan(np.sqrt((1 - e) / (1 + e)) * np.tan(f / 2))

@@ -9,13 +9,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pathlib import Path
+from typing import Optional, Callable
 
 from .routes.csv import router as csv_router
 from .routes.config import router as config_router
 from .routes.logs import router as logs_router
+from .routes.constellation import router as constellation_router
+from .ws.router import router as ws_router
+from .ws.manager import ConnectionManager
 from .lifespan import lifespan
 from .dependencies import init_dependencies
 from ..services.csv_service import CsvService
+from ..services.propagation_service import PropagationService
 from ..config.app_config import AppConfig
 
 
@@ -24,6 +29,9 @@ def create_app(
     config: AppConfig,
     web_dir: str = "web",
     db_enabled: bool = False,
+    constellation: Optional[object] = None,
+    propagation_service_factory: Optional[Callable[[], PropagationService]] = None,
+    protocol_logger: Optional[object] = None,
 ) -> FastAPI:
     """
     创建 FastAPI 应用实例。
@@ -33,6 +41,9 @@ def create_app(
         config: 应用配置
         web_dir: 前端静态资源目录
         db_enabled: 是否启用数据库功能
+        constellation: 星座实例（用于启动时同步到数据库）
+        propagation_service_factory: 传播服务工厂函数（用于 WebSocket）
+        protocol_logger: 协议日志记录器
 
     Returns:
         FastAPI 应用实例
@@ -43,6 +54,7 @@ def create_app(
         version="3.1",
         lifespan=lifespan if db_enabled else None,
     )
+    app.state.constellation = constellation if db_enabled else None
 
     # CORS 中间件
     app.add_middleware(
@@ -61,6 +73,30 @@ def create_app(
     if db_enabled:
         app.include_router(config_router)
         app.include_router(logs_router)
+        app.include_router(constellation_router)
+
+    # WebSocket 管理器（如果提供了工厂函数）
+    if propagation_service_factory:
+        # 获取共享的 session_factory（避免每个 WS 连接创建新引擎）
+        session_factory = None
+        if db_enabled:
+            from ..db.session import get_session_factory
+            try:
+                session_factory = get_session_factory()
+            except RuntimeError:
+                pass  # DB not initialized yet
+
+        ws_manager = ConnectionManager(
+            propagation_service_factory=propagation_service_factory,
+            constellation=constellation,
+            protocol_logger=protocol_logger,
+            session_factory=session_factory,
+        )
+        app.state.ws_manager = ws_manager
+        print(f"[App] WebSocket 管理器已初始化（最大 {ConnectionManager.MAX_CLIENTS} 客户端）")
+
+    # 注册 WebSocket 路由
+    app.include_router(ws_router)
 
     # 静态文件服务
     web_path = Path(web_dir)

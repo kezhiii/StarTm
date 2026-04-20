@@ -1,9 +1,7 @@
 import numpy as np
-from numba import jit
 
 
 #!平近点角M转换为真近点角f
-@jit
 def M_To_f(ee,M):
     kk = M / (2 * np.pi)
     M = M - np.floor(kk) * 2 * np.pi  # 将M归一化到 [0, 2*pi)

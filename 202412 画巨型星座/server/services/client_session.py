@@ -51,18 +51,26 @@ class ClientSession:
         self,
         client_id: str,
         websocket: Any,
-        propagation_service_factory: Callable[[], PropagationService],
+        service: Optional[PropagationService] = None,
+        propagation_service_factory: Optional[Callable[[], PropagationService]] = None,
         constellation=None,
         protocol_logger=None,
+        session_factory=None,
     ):
         self.client_id = client_id
         self.websocket = websocket
-        self.service = propagation_service_factory()
+        if service is not None:
+            self.service = service
+        elif propagation_service_factory is not None:
+            self.service = propagation_service_factory()
+        else:
+            raise ValueError("必须提供 service 或 propagation_service_factory")
         self.push_task: Optional[asyncio.Task] = None
         self.is_active = True
         self.stats = SessionStats()
         self._constellation = constellation
         self._protocol_logger = protocol_logger
+        self._session_factory = session_factory
         self._frame_counter = 0
         
     async def start(self) -> None:
@@ -113,8 +121,8 @@ class ClientSession:
             while self.is_active and self.service.state.value != "stopped":
                 try:
                     msg = await asyncio.wait_for(
-                        self.websocket.recv(), 
-                        timeout=0.1
+                        self.websocket.receive_text(), 
+                        timeout=5.0
                     )
                     self.stats.last_activity = time.time()
                     await self._handle_message(msg)
@@ -204,7 +212,18 @@ class ClientSession:
             data_list = []
             for frame in frames:
                 compact = frame.to_compact()
-                data_list.append([row.tolist() if hasattr(row, 'tolist') else list(row) for row in compact])
+                if not compact:
+                    continue
+                # Convert all values to native Python types for JSON serialization
+                row_list = []
+                for row in compact:
+                    if hasattr(row, 'tolist'):
+                        row_list.append(row.tolist())
+                    elif isinstance(row, (list, tuple)):
+                        row_list.append([float(v) if isinstance(v, (float, int)) else str(v) for v in row])
+                    else:
+                        row_list.append([row])
+                data_list.append(row_list)
             
             message = json.dumps({
                 "type": "data",
@@ -212,11 +231,13 @@ class ClientSession:
                 "is_first": is_first,
             })
             
-            await self.websocket.send(message)
+            await self.websocket.send_text(message)
             self.stats.last_activity = time.time()
             
         except Exception as e:
+            import traceback
             print(f"[Client {self.client_id}] 发送数据失败: {e}")
+            traceback.print_exc()
             raise
             
     async def _send_command(self, cmd: str) -> None:
@@ -226,7 +247,7 @@ class ClientSession:
                 "type": "command",
                 "cmd": cmd,
             })
-            await self.websocket.send(message)
+            await self.websocket.send_text(message)
             self.stats.last_activity = time.time()
         except Exception as e:
             print(f"[Client {self.client_id}] 发送命令失败: {e}")
@@ -331,6 +352,19 @@ class ClientSession:
             if self._constellation:
                 results = self._constellation.apply_light_control(commands)
                 
+                # 同步灯光状态到数据库
+                try:
+                    await self._sync_light_state_to_db(self._constellation)
+                except Exception as e:
+                    print(f"[Client {self.client_id}] 灯光状态同步到数据库失败: {e}")
+                
+                # 同步邻居关系到数据库
+                if neighbor_map:
+                    try:
+                        await self._sync_neighbors_to_db(neighbor_map)
+                    except Exception as e:
+                        print(f"[Client {self.client_id}] 邻居关系同步到数据库失败: {e}")
+                
                 for cmd_item in commands:
                     sat_id = cmd_item.get("sat_id", 0)
                     command = cmd_item.get("command", "").lower()
@@ -424,9 +458,59 @@ class ClientSession:
                 "cmd": cmd,
                 "data": data,
             })
-            await self.websocket.send(message)
+            await self.websocket.send_text(message)
         except Exception as e:
             print(f"[Client {self.client_id}] 发送响应失败: {e}")
+    
+    async def _sync_light_state_to_db(self, constellation) -> None:
+        """同步星座灯光状态到数据库"""
+        if self._session_factory is None:
+            return
+        
+        from ..db.repositories.satellite_repo import SatelliteRepository
+        
+        async with self._session_factory() as session:
+            repo = SatelliteRepository(session)
+            for sat in constellation.satellites:
+                await repo.update_light_state(sat.sat_id, sat.light_state)
+            await session.commit()
+    
+    async def _sync_neighbors_to_db(self, neighbor_map: dict) -> None:
+        """同步邻居关系到数据库"""
+        if self._session_factory is None:
+            return
+        
+        from ..db.repositories.neighbor_repo import NeighborRepository
+        
+        # 计算实际距离
+        distances = {}
+        if self._constellation:
+            from orbitElementsToInertiastate import OrbitElementsToInertiastate
+            import math
+            
+            positions = {}
+            for sat in self._constellation.satellites:
+                oe_array = sat.orbit_elements.to_numpy()
+                inertial = OrbitElementsToInertiastate(oe_array)
+                positions[sat.sat_id] = (inertial[0], inertial[1], inertial[2])
+            
+            for sat_id, neighbors in neighbor_map.items():
+                if sat_id not in positions:
+                    continue
+                x1, y1, z1 = positions[sat_id]
+                for neighbor_id in neighbors:
+                    if neighbor_id not in positions:
+                        continue
+                    x2, y2, z2 = positions[neighbor_id]
+                    dist_km = math.sqrt(
+                        (x1 - x2) ** 2 + (y1 - y2) ** 2 + (z1 - z2) ** 2
+                    ) / 1000.0
+                    distances[(sat_id, neighbor_id)] = dist_km
+        
+        async with self._session_factory() as session:
+            repo = NeighborRepository(session)
+            await repo.upsert_many(neighbor_map, distances=distances)
+            await session.commit()
             
     def get_stats(self) -> dict:
         """获取会话统计信息"""

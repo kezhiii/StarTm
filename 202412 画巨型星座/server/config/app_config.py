@@ -1,55 +1,54 @@
 """
 应用程序配置管理
 
-提供 YAML 配置加载、验证和类型化访问。
+使用 Pydantic BaseModel 提供类型化配置访问、自动验证和类型转换。
 """
 
 from __future__ import annotations
 import os
-from dataclasses import dataclass, field
-from typing import Optional
+import json
+import asyncio
+from datetime import datetime
+from typing import Optional, Dict, Any
 
 import yaml
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
-@dataclass
-class ServerConfig:
+class ServerConfig(BaseModel):
     """服务器配置"""
-    http_port: int = 8000
-    csv_api_port: int = 8080
-    ws_port: int = 8765
-    ws_host: str = "0.0.0.0"
+    http_port: int = Field(default=8000, ge=1, le=65535)
+    csv_api_port: int = Field(default=8080, ge=1, le=65535)
+    ws_port: int = Field(default=8765, ge=1, le=65535)
+    ws_host: str = Field(default="0.0.0.0")
 
 
-@dataclass
-class PropagationConfig:
+class PropagationConfig(BaseModel):
     """轨道递推配置"""
-    initial_push_seconds: int = 5
-    compute_interval: int = 10
-    push_interval: int = 10
-    buffer_capacity: int = 3600
-    dt: float = 1.0
+    initial_push_seconds: int = Field(default=5, gt=0)
+    compute_interval: int = Field(default=10, gt=0)
+    push_interval: int = Field(default=10, gt=0)
+    buffer_capacity: int = Field(default=3600, gt=0)
+    dt: float = Field(default=1.0, gt=0)
 
 
-@dataclass
-class ConstellationConfig:
+class ConstellationConfig(BaseModel):
     """星座基础配置"""
-    name: str = "Constellation"
-    start_year: int = 2021
-    start_month: int = 8
-    start_day: int = 17
-    center_oe_file: str = "Input/centerOEmat.txt"
-    deputy_oe_file: str = "Input/deputyOEmat.txt"
+    name: str = Field(default="Constellation")
+    start_year: int = Field(default=2021, ge=1900, le=2100)
+    start_month: int = Field(default=8, ge=1, le=12)
+    start_day: int = Field(default=17, ge=1, le=31)
+    center_oe_file: str = Field(default="Input/centerOEmat.txt")
+    deputy_oe_file: str = Field(default="Input/deputyOEmat.txt")
 
 
-@dataclass
-class ConstellationParamsConfig:
+class ConstellationParamsConfig(BaseModel):
     """星座参数配置（用于生成星座）"""
-    orbit_height: float = 400000.0
-    inclination_deg: float = 55.0
-    phase_factor: int = 0
-    plane_count: int = 20
-    satellites_per_plane: int = 15
+    orbit_height: float = Field(default=400000.0, gt=0)
+    inclination_deg: float = Field(default=55.0, ge=0, le=180)
+    phase_factor: int = Field(default=0)
+    plane_count: int = Field(default=20, gt=0)
+    satellites_per_plane: int = Field(default=15, gt=0)
 
     @property
     def total_satellites(self) -> int:
@@ -57,18 +56,17 @@ class ConstellationParamsConfig:
         return self.plane_count * self.satellites_per_plane
 
 
-@dataclass
-class PhysicsConfig:
+class PhysicsConfig(BaseModel):
     """物理常量配置"""
-    mu: float = 3.986004418e14
-    mu_moon: float = 4.903e12
-    mu_sun: float = 1.32712440018e20
-    RE: float = 6.378137e6
-    J2: float = 1.082626683e-3
-    wE: float = 7.2921159e-5
-    satellite_mass: float = 300.0
-    cross_section: float = 0.785
-    drag_coefficient: float = 2.2
+    mu: float = Field(default=3.986004418e14, gt=0)
+    mu_moon: float = Field(default=4.903e12, gt=0)
+    mu_sun: float = Field(default=1.32712440018e20, gt=0)
+    RE: float = Field(default=6.378137e6, gt=0)
+    J2: float = Field(default=1.082626683e-3, gt=0)
+    wE: float = Field(default=7.2921159e-5, gt=0)
+    satellite_mass: float = Field(default=300.0, gt=0)
+    cross_section: float = Field(default=0.785, gt=0)
+    drag_coefficient: float = Field(default=2.2, gt=0)
 
     @property
     def days_to_seconds(self) -> float:
@@ -76,38 +74,34 @@ class PhysicsConfig:
         return 86400.0
 
 
-@dataclass
-class UnitsConfig:
+class UnitsConfig(BaseModel):
     """单位转换配置"""
-    hours_to_seconds: int = 3600
-    days_to_seconds: int = 86400
-    deg_to_rad: float = 0.017453292519943295
+    hours_to_seconds: int = Field(default=3600, gt=0)
+    days_to_seconds: int = Field(default=86400, gt=0)
+    deg_to_rad: float = Field(default=0.017453292519943295)
 
 
-@dataclass
-class CsvConfig:
+class CsvConfig(BaseModel):
     """CSV 配置"""
-    default_path: str = "Output/test_1.csv"
-    api_port: int = 8080
-    compress: bool = True
+    default_path: str = Field(default="Output/test_1.csv")
+    api_port: int = Field(default=8080, ge=1, le=65535)
+    compress: bool = Field(default=True)
 
 
-@dataclass
-class LoggingConfig:
+class LoggingConfig(BaseModel):
     """日志配置"""
-    level: str = "INFO"
-    format: str = "[%(name)s] %(message)s"
+    level: str = Field(default="INFO")
+    format: str = Field(default="[%(name)s] %(message)s")
 
 
 class AppConfig:
     """
     应用程序配置主类。
 
-    职责：
-    - 加载 YAML 配置文件
-    - 提供类型化的配置访问
-    - 验证配置完整性
-    - 计算派生值（如 JD0）
+    使用 Pydantic BaseModel 作为子配置容器，提供：
+    - 自动类型验证和转换
+    - YAML 文件加载
+    - 数据库加载/种子化
     """
 
     def __init__(self):
@@ -147,8 +141,6 @@ class AppConfig:
 
         config = cls()
         config._apply_raw(raw)
-        config.validate()
-
         return config
 
     @classmethod
@@ -167,40 +159,6 @@ class AppConfig:
 
         config_path = os.path.join(base_dir, "config", "default.yaml")
         return cls.load(config_path)
-
-    def validate(self) -> None:
-        """
-        验证配置完整性。
-
-        Raises:
-            ValueError: 配置项无效
-        """
-        if self.server.http_port <= 0 or self.server.http_port > 65535:
-            raise ValueError(f"无效的 HTTP 端口: {self.server.http_port}")
-
-        if self.server.ws_port <= 0 or self.server.ws_port > 65535:
-            raise ValueError(f"无效的 WebSocket 端口: {self.server.ws_port}")
-
-        if self.propagation.dt <= 0:
-            raise ValueError(f"无效的时间步长: {self.propagation.dt}")
-
-        if self.propagation.buffer_capacity <= 0:
-            raise ValueError(f"无效的缓冲区容量: {self.propagation.buffer_capacity}")
-
-        if self.constellation.start_year < 1900 or self.constellation.start_year > 2100:
-            raise ValueError(f"无效的起始年份: {self.constellation.start_year}")
-
-        if self.constellation_params.plane_count <= 0:
-            raise ValueError(f"无效的轨道面数: {self.constellation_params.plane_count}")
-
-        if self.constellation_params.satellites_per_plane <= 0:
-            raise ValueError(f"无效的每轨道面卫星数: {self.constellation_params.satellites_per_plane}")
-
-        if self.physics.mu <= 0:
-            raise ValueError(f"无效的地心引力常数: {self.physics.mu}")
-
-        if self.physics.RE <= 0:
-            raise ValueError(f"无效的地球半径: {self.physics.RE}")
 
     def compute_jd0(self) -> float:
         """
@@ -245,101 +203,37 @@ class AppConfig:
             os.path.basename(self.constellation.deputy_oe_file)
         )
 
-    def _convert_value(self, field_name: str, value, fields: dict) -> any:
-        """
-        将 YAML 值转换为正确的类型。
-        """
-        if field_name not in fields:
-            return value
-
-        field_type = fields[field_name].type
-
-        # 处理字符串类型的数字（如科学计数法）
-        if isinstance(value, str):
-            # 由于 from __future__ import annotations，类型是字符串
-            type_str = str(field_type) if not isinstance(field_type, str) else field_type
-            if type_str == 'float' or type_str == "<class 'float'>":
-                return float(value)
-            elif type_str == 'int' or type_str == "<class 'int'>":
-                try:
-                    return int(value)
-                except ValueError:
-                    return int(float(value))
-            elif type_str == 'bool' or type_str == "<class 'bool'>":
-                return value.lower() in ('true', '1', 'yes')
-
-        return value
-
     def _apply_raw(self, raw: dict) -> None:
         """
         将原始字典应用到配置对象。
+        Pydantic 自动处理类型转换和验证。
 
         Args:
             raw: 原始 YAML 字典
         """
         if 'server' in raw:
-            fields = ServerConfig.__dataclass_fields__
-            self.server = ServerConfig(**{
-                k: self._convert_value(k, v, fields)
-                for k, v in raw['server'].items()
-                if k in fields
-            })
+            self.server = ServerConfig.model_validate(raw['server'])
 
         if 'propagation' in raw:
-            fields = PropagationConfig.__dataclass_fields__
-            self.propagation = PropagationConfig(**{
-                k: self._convert_value(k, v, fields)
-                for k, v in raw['propagation'].items()
-                if k in fields
-            })
+            self.propagation = PropagationConfig.model_validate(raw['propagation'])
 
         if 'constellation' in raw:
-            fields = ConstellationConfig.__dataclass_fields__
-            self.constellation = ConstellationConfig(**{
-                k: self._convert_value(k, v, fields)
-                for k, v in raw['constellation'].items()
-                if k in fields
-            })
+            self.constellation = ConstellationConfig.model_validate(raw['constellation'])
 
         if 'constellation_params' in raw:
-            fields = ConstellationParamsConfig.__dataclass_fields__
-            self.constellation_params = ConstellationParamsConfig(**{
-                k: self._convert_value(k, v, fields)
-                for k, v in raw['constellation_params'].items()
-                if k in fields
-            })
+            self.constellation_params = ConstellationParamsConfig.model_validate(raw['constellation_params'])
 
         if 'physics' in raw:
-            fields = PhysicsConfig.__dataclass_fields__
-            self.physics = PhysicsConfig(**{
-                k: self._convert_value(k, v, fields)
-                for k, v in raw['physics'].items()
-                if k in fields
-            })
+            self.physics = PhysicsConfig.model_validate(raw['physics'])
 
         if 'units' in raw:
-            fields = UnitsConfig.__dataclass_fields__
-            self.units = UnitsConfig(**{
-                k: self._convert_value(k, v, fields)
-                for k, v in raw['units'].items()
-                if k in fields
-            })
+            self.units = UnitsConfig.model_validate(raw['units'])
 
         if 'csv' in raw:
-            fields = CsvConfig.__dataclass_fields__
-            self.csv = CsvConfig(**{
-                k: self._convert_value(k, v, fields)
-                for k, v in raw['csv'].items()
-                if k in fields
-            })
+            self.csv = CsvConfig.model_validate(raw['csv'])
 
         if 'logging' in raw:
-            fields = LoggingConfig.__dataclass_fields__
-            self.logging = LoggingConfig(**{
-                k: self._convert_value(k, v, fields)
-                for k, v in raw['logging'].items()
-                if k in fields
-            })
+            self.logging = LoggingConfig.model_validate(raw['logging'])
 
     def __repr__(self) -> str:
         return (
@@ -362,10 +256,8 @@ class AppConfig:
         Returns:
             AppConfig 实例
         """
-        import json
         from ..db.session import init_engine, get_session_factory
         from ..db.repositories.config_repo import ConfigRepository
-        from sqlalchemy.ext.asyncio import AsyncSession
 
         # 先加载默认 YAML 配置作为基础
         try:
@@ -389,17 +281,22 @@ class AppConfig:
                 db_configs = await repo.load_all_to_dict()
 
             if db_configs:
-                # 用数据库配置覆盖 YAML 配置
-                for section, values in db_configs.items():
-                    if hasattr(config, section):
-                        section_obj = getattr(config, section)
-                        if isinstance(section_obj, dict):
-                            section_obj.update(values)
-                        elif hasattr(section_obj, '__dataclass_fields__'):
-                            for key, value in values.items():
-                                if hasattr(section_obj, key):
-                                    setattr(section_obj, key, value)
-                config.validate()
+                for section_name, values in db_configs.items():
+                    section_map = {
+                        'server': ServerConfig,
+                        'propagation': PropagationConfig,
+                        'constellation': ConstellationConfig,
+                        'constellation_params': ConstellationParamsConfig,
+                        'physics': PhysicsConfig,
+                        'units': UnitsConfig,
+                        'csv': CsvConfig,
+                        'logging': LoggingConfig,
+                    }
+                    if section_name in section_map:
+                        current = getattr(config, section_name)
+                        current_dict = current.model_dump()
+                        current_dict.update(values)
+                        setattr(config, section_name, section_map[section_name].model_validate(current_dict))
                 print("[AppConfig] 已从数据库加载配置")
             else:
                 print("[AppConfig] 数据库无配置，使用 YAML 默认值")
@@ -420,9 +317,6 @@ def seed_config_to_db(config: 'AppConfig', db_url: str = None) -> None:
         config: AppConfig 实例
         db_url: 数据库连接字符串
     """
-    import json
-    import asyncio
-    from datetime import datetime
     from ..db.session import init_engine, get_session_factory
     from ..db.repositories.config_repo import ConfigRepository
 
@@ -449,18 +343,16 @@ def seed_config_to_db(config: 'AppConfig', db_url: str = None) -> None:
             repo = ConfigRepository(session)
             count = 0
             for section_name, section_obj in sections:
-                if hasattr(section_obj, '__dataclass_fields__'):
-                    for field_name in section_obj.__dataclass_fields__:
-                        value = getattr(section_obj, field_name)
-                        key = f"{section_name}.{field_name}"
-                        await repo.set_config(
-                            key=key,
-                            value=value,
-                            section=section_name,
-                            description=f"Auto-seeded from YAML config",
-                            updated_by="seed_script",
-                        )
-                        count += 1
+                for field_name, field_value in section_obj.model_dump().items():
+                    key = f"{section_name}.{field_name}"
+                    await repo.set_config(
+                        key=key,
+                        value=field_value,
+                        section=section_name,
+                        description=f"Auto-seeded from YAML config",
+                        updated_by="seed_script",
+                    )
+                    count += 1
             print(f"[Seed] 已写入 {count} 条配置到数据库")
 
     asyncio.run(_seed())

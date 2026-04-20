@@ -2,10 +2,11 @@
 灯光控制服务
 
 管理卫星编队的灯光状态，处理灯光控制命令。
+支持可选的数据库持久化。
 """
 
 from __future__ import annotations
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Optional
 
 from ..protocol.constants import LightCommand
 
@@ -15,6 +16,7 @@ class LightControlService:
     灯光控制服务
     
     管理所有卫星的灯光状态，提供设置、获取、切换灯光的接口。
+    支持可选的数据库持久化（通过 satellite_repo）。
     
     灯光控制数据格式（SubMessage.Data）:
     [Command_Type(1B), Light_State(1B)]
@@ -22,17 +24,23 @@ class LightControlService:
     - Light_State: 0x00=灭, 0x01=亮
     """
     
-    def __init__(self, num_satellites: int = 22):
+    def __init__(self, num_satellites: int = 22, satellite_repo=None):
         """
         初始化灯光控制服务
         
         Args:
             num_satellites: 卫星数量（默认22颗）
+            satellite_repo: SatelliteRepository 实例（可选，用于 DB 持久化）
         """
         self._light_states: Dict[int, bool] = {
             i: False for i in range(num_satellites)
         }
         self._num_satellites = num_satellites
+        self._satellite_repo = satellite_repo
+    
+    def set_satellite_repo(self, satellite_repo) -> None:
+        """设置卫星仓库（用于 DB 持久化）"""
+        self._satellite_repo = satellite_repo
     
     def set_light(self, sat_id: int, command: LightCommand) -> bool:
         """
@@ -59,6 +67,25 @@ class LightControlService:
             raise ValueError(f"Unknown light command: {command}")
         
         print(f"[LightControl] 卫星{sat_id} 灯光: {'开' if self._light_states[sat_id] else '关'}")
+        return True
+    
+    async def set_light_async(self, sat_id: int, command: LightCommand) -> bool:
+        """
+        设置卫星灯光状态并持久化到 DB
+        
+        Args:
+            sat_id: 卫星编号
+            command: 灯光命令
+            
+        Returns:
+            是否设置成功
+        """
+        self.set_light(sat_id, command)
+        
+        if self._satellite_repo:
+            light_state = command == LightCommand.TURN_ON
+            await self._satellite_repo.update_light_state(sat_id, light_state)
+        
         return True
     
     def get_light(self, sat_id: int) -> bool:

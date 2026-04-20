@@ -1,7 +1,7 @@
 """
-摄动轨道推进器 (JIT 加速)
+摄动轨道推进器
 
-迁移自 perturbedOrbit.py，使用 numba JIT 编译加速。
+迁移自 perturbedOrbit.py，使用纯 numpy 计算。
 保持与旧代码完全相同的计算逻辑。
 """
 
@@ -10,7 +10,6 @@ import os
 import sys
 
 import numpy as np
-from numba import jit
 
 # 添加项目根目录到路径，以便导入旧模块
 # perturbed.py is in server/propagators/, so we need to go up 2 levels to get project root
@@ -43,8 +42,7 @@ from ..core.inertial_state import InertialState
 from ..core.physical_props import PhysicalProps
 
 
-# ======================== 导入旧模块的 JIT 函数 ========================
-# 这些函数已经是 @jit 装饰的，直接使用
+# ======================== 导入旧模块的函数 ========================
 from M_To_ff import M_To_f
 from f_To_MM import f_To_M
 from orbitElementsToInertiastate import OrbitElementsToInertiastate
@@ -53,9 +51,8 @@ from solar_positionn import solar_position
 from lunar_positionn import lunar_position
 
 
-# ======================== JIT 单步递推 ========================
+# ======================== 单步递推 ========================
 
-@jit(nopython=True)
 def _perturbed_orbit_step(oe_array: np.ndarray, ts: float, step: int) -> np.ndarray:
     """
     摄动轨道递推一步。
@@ -189,7 +186,6 @@ def _perturbed_orbit_step(oe_array: np.ndarray, ts: float, step: int) -> np.ndar
     return np.array([anext, enext, inext, OMGnext, wnext, Mnext])
 
 
-@jit(nopython=True)
 def _compute_inertial_state(oe_array: np.ndarray) -> np.ndarray:
     """
     从轨道根数计算惯性状态。
@@ -213,7 +209,6 @@ def _compute_inertial_state(oe_array: np.ndarray) -> np.ndarray:
 
 # ======================== 星座批量递推 (JIT) ========================
 
-@jit(nopython=True)
 def _propagate_constellation_batch(
     sateOEmat: np.ndarray,
     dt: float,
@@ -255,14 +250,14 @@ def _propagate_constellation_batch(
 
 class PerturbedOrbitPropagator(OrbitPropagator):
     """
-    摄动轨道推进器 (JIT 加速)。
+    摄动轨道推进器。
     
     支持 J2 摄动 + 大气阻力 + 太阳引力 + 月球引力。
-    使用 numba JIT 编译加速批量计算。
+    使用 numpy 进行批量计算。
     """
     
     def __init__(self):
-        self._jit_warmed_up = False
+        pass
     
     def propagate_satellite(self, satellite: Satellite, dt: float, step: int) -> Satellite:
         """
@@ -305,7 +300,7 @@ class PerturbedOrbitPropagator(OrbitPropagator):
     
     def propagate_constellation(self, constellation: Constellation, dt: float, step: int) -> Constellation:
         """
-        批量递推整个星座（JIT 加速）。
+        批量递推整个星座。
         
         Args:
             constellation: 当前星座状态
@@ -315,43 +310,15 @@ class PerturbedOrbitPropagator(OrbitPropagator):
         Returns:
             递推后的新星座状态
         """
-        # 获取 numpy 矩阵 [a(m), e, i(rad), OMG(rad), omg(rad), f(rad)]
         sateOEmat = constellation.get_numpy_matrix()
-        
-        # JIT 批量递推（内部会处理 f→M→propagate→M→f 的完整流程）
         new_oe, new_inertial = _propagate_constellation_batch(sateOEmat, dt, step)
-        
-        # 更新星座
         constellation.update_from_numpy_matrix(new_oe)
-        
         inertial_states = [
             InertialState.from_numpy(new_inertial[i])
             for i in range(new_inertial.shape[0])
         ]
         constellation.update_inertial_states(inertial_states)
-        
         return constellation
     
     def get_name(self) -> str:
         return "PerturbedOrbit (J2 + Drag + Sun + Moon)"
-    
-    def warmup_jit(self) -> None:
-        """
-        预热 JIT 编译器。
-        
-        在服务器启动时调用，避免首次客户端连接时等待编译。
-        """
-        if self._jit_warmed_up:
-            return
-        
-        print("[Propagator] JIT 预热中（首次编译可能较慢）...")
-        import time
-        start = time.time()
-        
-        # 创建测试数据触发编译
-        test_oe = np.array([[6878137.0, 0.0, 0.5236, 0.0, 0.0, 0.0]])
-        _propagate_constellation_batch(test_oe, 1.0, 0)
-        
-        elapsed = time.time() - start
-        self._jit_warmed_up = True
-        print(f"[Propagator] JIT 预热完成，耗时 {elapsed:.1f} 秒")

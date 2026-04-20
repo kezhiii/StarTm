@@ -14,7 +14,7 @@ const DBG = {
     error: (...a) => console.error('[PLAYBACK]', ...a)
 };
 
-const PORT = 8765;
+const WS_PORT = 8000;
 const WS_MAX_QUEUE_SIZE = 3600;
 
 // CSV 播放循环状态（模块级，以便 changeSpeed 时保持状态）
@@ -651,7 +651,8 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
 
         function attemptConnection() {
             console.log(`[WS] 创建新 WebSocket 连接 (尝试 ${retryCount + 1}/${maxRetries})`);
-            wsState.connection = new WebSocket(`ws://127.0.0.1:${PORT}`);
+            const clientId = 'web_' + Date.now() + '_' + Math.floor(Math.random() * 1000000);
+            wsState.connection = new WebSocket(`ws://127.0.0.1:${WS_PORT}/ws/${clientId}`);
 
             wsState.connection.onopen = () => {
                 console.log('[WS] 连接已打开');

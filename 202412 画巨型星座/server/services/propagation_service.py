@@ -167,14 +167,20 @@ class PropagationService:
     
     def start(self) -> None:
         """启动递推"""
+        if self._state == PropagationState.RUNNING:
+            return
         self._transition_to(PropagationState.RUNNING)
     
     def pause(self) -> None:
         """暂停递推"""
+        if self._state == PropagationState.PAUSED:
+            return
         self._transition_to(PropagationState.PAUSED)
     
     def resume(self) -> None:
         """恢复递推"""
+        if self._state == PropagationState.RUNNING:
+            return
         self._transition_to(PropagationState.RUNNING)
     
     def stop(self) -> None:
@@ -203,15 +209,6 @@ class PropagationService:
         
         self._current_step = 0
         self._buffer.clear()
-    
-    def warmup_jit(self) -> None:
-        """
-        预热 JIT 编译器。
-        
-        如果推进器支持 JIT 预热，调用它。
-        """
-        if hasattr(self._propagator, 'warmup_jit'):
-            self._propagator.warmup_jit()
     
     def _seconds_to_timestamp(self, total_seconds: int) -> str:
         """
