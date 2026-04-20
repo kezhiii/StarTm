@@ -1,0 +1,183 @@
+============================================================
+协议帧处理日志
+启动时间: 2026-04-20 14:29:43
+日志文件: test_20260420142943.log
+============================================================
+
+=== 协议帧处理日志 ===
+时间: 2026-04-20 14:30:08.408
+客户端: 127.0.0.1:52013_2397460686864
+
+[1] 发送原始帧 (Base64):
+    YmF0Y2hfY29tbWFuZA==
+
+    指令列表 (6条):
+      → 卫星0 开灯
+      → 卫星21 开灯
+      → 卫星18 开灯
+      → 卫星11 开灯
+      → 卫星15 开灯
+      → 卫星14 开灯
+
+[4] LDPC解码后:
+    Sync: AABBCCDD
+    Version: 1
+    SCID: 0001
+    VCID: 0
+    Frame_Count: 1
+    Packet_Type: 03 (LIGHT_CONTROL)
+    Dest_ID: 0000
+    Packet_ID: 0001
+    Packet_Length: 33
+    CRC: A38486F5
+
+[5] CRC校验: 通过 (CRC=A38486F5)
+
+[6] LDPC解码后完整消息队列（按卫星分组）:
+    共16颗卫星帧
+
+  ── 帧 Dest_ID=0x0000 (卫星0) ──
+    SubMsg[0]: Msg_ID=0000, Dest_ID=0000, Data_Length=2, Data=0101  [自身指令]
+        → 指令类型: 0x01 (开灯)
+    SubMsg[1]: Msg_ID=0001, Dest_ID=0002, Data_Length=0, Data=(空)  [邻星验证(卫星2)]
+        → 该卫星未被点亮（空数据）
+    SubMsg[2]: Msg_ID=0002, Dest_ID=0001, Data_Length=0, Data=(空)  [邻星验证(卫星1)]
+        → 该卫星未被点亮（空数据）
+
+  ── 帧 Dest_ID=0x0001 (卫星1) ──
+    SubMsg[0]: Msg_ID=0000, Dest_ID=0001, Data_Length=0, Data=(空)  [自身指令]
+        → 该卫星未被点亮（空数据）
+    SubMsg[1]: Msg_ID=0001, Dest_ID=0000, Data_Length=2, Data=0101  [邻星验证(卫星0)]
+        → 指令类型: 0x01 (开灯)
+    SubMsg[2]: Msg_ID=0002, Dest_ID=0005, Data_Length=0, Data=(空)  [邻星验证(卫星5)]
+        → 该卫星未被点亮（空数据）
+
+  ── 帧 Dest_ID=0x0002 (卫星2) ──
+    SubMsg[0]: Msg_ID=0000, Dest_ID=0002, Data_Length=0, Data=(空)  [自身指令]
+        → 该卫星未被点亮（空数据）
+    SubMsg[1]: Msg_ID=0001, Dest_ID=0007, Data_Length=0, Data=(空)  [邻星验证(卫星7)]
+        → 该卫星未被点亮（空数据）
+    SubMsg[2]: Msg_ID=0002, Dest_ID=0000, Data_Length=2, Data=0101  [邻星验证(卫星0)]
+        → 指令类型: 0x01 (开灯)
+
+  ── 帧 Dest_ID=0x0004 (卫星4) ──
+    SubMsg[0]: Msg_ID=0000, Dest_ID=0004, Data_Length=0, Data=(空)  [自身指令]
+        → 该卫星未被点亮（空数据）
+    SubMsg[1]: Msg_ID=0001, Dest_ID=000B, Data_Length=2, Data=0101  [邻星验证(卫星11)]
+        → 指令类型: 0x01 (开灯)
+    SubMsg[2]: Msg_ID=0002, Dest_ID=0003, Data_Length=0, Data=(空)  [邻星验证(卫星3)]
+        → 该卫星未被点亮（空数据）
+
+  ── 帧 Dest_ID=0x0006 (卫星6) ──
+    SubMsg[0]: Msg_ID=0000, Dest_ID=0006, Data_Length=0, Data=(空)  [自身指令]
+        → 该卫星未被点亮（空数据）
+    SubMsg[1]: Msg_ID=0001, Dest_ID=000F, Data_Length=2, Data=0101  [邻星验证(卫星15)]
+        → 指令类型: 0x01 (开灯)
+    SubMsg[2]: Msg_ID=0002, Dest_ID=0010, Data_Length=0, Data=(空)  [邻星验证(卫星16)]
+        → 该卫星未被点亮（空数据）
+
+  ── 帧 Dest_ID=0x0007 (卫星7) ──
+    SubMsg[0]: Msg_ID=0000, Dest_ID=0007, Data_Length=0, Data=(空)  [自身指令]
+        → 该卫星未被点亮（空数据）
+    SubMsg[1]: Msg_ID=0001, Dest_ID=0002, Data_Length=0, Data=(空)  [邻星验证(卫星2)]
+        → 该卫星未被点亮（空数据）
+    SubMsg[2]: Msg_ID=0002, Dest_ID=0011, Data_Length=0, Data=(空)  [邻星验证(卫星17)]
+        → 该卫星未被点亮（空数据）
+
+  ── 帧 Dest_ID=0x0008 (卫星8) ──
+    SubMsg[0]: Msg_ID=0000, Dest_ID=0008, Data_Length=0, Data=(空)  [自身指令]
+        → 该卫星未被点亮（空数据）
+    SubMsg[1]: Msg_ID=0001, Dest_ID=0013, Data_Length=0, Data=(空)  [邻星验证(卫星19)]
+        → 该卫星未被点亮（空数据）
+    SubMsg[2]: Msg_ID=0002, Dest_ID=0012, Data_Length=2, Data=0101  [邻星验证(卫星18)]
+        → 指令类型: 0x01 (开灯)
+
+  ── 帧 Dest_ID=0x0009 (卫星9) ──
+    SubMsg[0]: Msg_ID=0000, Dest_ID=0009, Data_Length=0, Data=(空)  [自身指令]
+        → 该卫星未被点亮（空数据）
+    SubMsg[1]: Msg_ID=0001, Dest_ID=0003, Data_Length=0, Data=(空)  [邻星验证(卫星3)]
+        → 该卫星未被点亮（空数据）
+    SubMsg[2]: Msg_ID=0002, Dest_ID=0015, Data_Length=2, Data=0101  [邻星验证(卫星21)]
+        → 指令类型: 0x01 (开灯)
+
+  ── 帧 Dest_ID=0x000A (卫星10) ──
+    SubMsg[0]: Msg_ID=0000, Dest_ID=000A, Data_Length=0, Data=(空)  [自身指令]
+        → 该卫星未被点亮（空数据）
+    SubMsg[1]: Msg_ID=0001, Dest_ID=0009, Data_Length=0, Data=(空)  [邻星验证(卫星9)]
+        → 该卫星未被点亮（空数据）
+    SubMsg[2]: Msg_ID=0002, Dest_ID=0015, Data_Length=2, Data=0101  [邻星验证(卫星21)]
+        → 指令类型: 0x01 (开灯)
+
+  ── 帧 Dest_ID=0x000B (卫星11) ──
+    SubMsg[0]: Msg_ID=0000, Dest_ID=000B, Data_Length=2, Data=0101  [自身指令]
+        → 指令类型: 0x01 (开灯)
+    SubMsg[1]: Msg_ID=0001, Dest_ID=0004, Data_Length=0, Data=(空)  [邻星验证(卫星4)]
+        → 该卫星未被点亮（空数据）
+    SubMsg[2]: Msg_ID=0002, Dest_ID=000A, Data_Length=0, Data=(空)  [邻星验证(卫星10)]
+        → 该卫星未被点亮（空数据）
+
+  ── 帧 Dest_ID=0x000D (卫星13) ──
+    SubMsg[0]: Msg_ID=0000, Dest_ID=000D, Data_Length=0, Data=(空)  [自身指令]
+        → 该卫星未被点亮（空数据）
+    SubMsg[1]: Msg_ID=0001, Dest_ID=0005, Data_Length=0, Data=(空)  [邻星验证(卫星5)]
+        → 该卫星未被点亮（空数据）
+    SubMsg[2]: Msg_ID=0002, Dest_ID=000E, Data_Length=2, Data=0101  [邻星验证(卫星14)]
+        → 指令类型: 0x01 (开灯)
+
+  ── 帧 Dest_ID=0x000E (卫星14) ──
+    SubMsg[0]: Msg_ID=0000, Dest_ID=000E, Data_Length=2, Data=0101  [自身指令]
+        → 指令类型: 0x01 (开灯)
+    SubMsg[1]: Msg_ID=0001, Dest_ID=000F, Data_Length=2, Data=0101  [邻星验证(卫星15)]
+        → 指令类型: 0x01 (开灯)
+    SubMsg[2]: Msg_ID=0002, Dest_ID=000D, Data_Length=0, Data=(空)  [邻星验证(卫星13)]
+        → 该卫星未被点亮（空数据）
+
+  ── 帧 Dest_ID=0x000F (卫星15) ──
+    SubMsg[0]: Msg_ID=0000, Dest_ID=000F, Data_Length=2, Data=0101  [自身指令]
+        → 指令类型: 0x01 (开灯)
+    SubMsg[1]: Msg_ID=0001, Dest_ID=0006, Data_Length=0, Data=(空)  [邻星验证(卫星6)]
+        → 该卫星未被点亮（空数据）
+    SubMsg[2]: Msg_ID=0002, Dest_ID=000E, Data_Length=2, Data=0101  [邻星验证(卫星14)]
+        → 指令类型: 0x01 (开灯)
+
+  ── 帧 Dest_ID=0x0012 (卫星18) ──
+    SubMsg[0]: Msg_ID=0000, Dest_ID=0012, Data_Length=2, Data=0101  [自身指令]
+        → 指令类型: 0x01 (开灯)
+    SubMsg[1]: Msg_ID=0001, Dest_ID=0008, Data_Length=0, Data=(空)  [邻星验证(卫星8)]
+        → 该卫星未被点亮（空数据）
+    SubMsg[2]: Msg_ID=0002, Dest_ID=0007, Data_Length=0, Data=(空)  [邻星验证(卫星7)]
+        → 该卫星未被点亮（空数据）
+
+  ── 帧 Dest_ID=0x0014 (卫星20) ──
+    SubMsg[0]: Msg_ID=0000, Dest_ID=0014, Data_Length=0, Data=(空)  [自身指令]
+        → 该卫星未被点亮（空数据）
+    SubMsg[1]: Msg_ID=0001, Dest_ID=0015, Data_Length=2, Data=0101  [邻星验证(卫星21)]
+        → 指令类型: 0x01 (开灯)
+    SubMsg[2]: Msg_ID=0002, Dest_ID=0013, Data_Length=0, Data=(空)  [邻星验证(卫星19)]
+        → 该卫星未被点亮（空数据）
+
+  ── 帧 Dest_ID=0x0015 (卫星21) ──
+    SubMsg[0]: Msg_ID=0000, Dest_ID=0015, Data_Length=2, Data=0101  [自身指令]
+        → 指令类型: 0x01 (开灯)
+    SubMsg[1]: Msg_ID=0001, Dest_ID=0009, Data_Length=0, Data=(空)  [邻星验证(卫星9)]
+        → 该卫星未被点亮（空数据）
+    SubMsg[2]: Msg_ID=0002, Dest_ID=0014, Data_Length=0, Data=(空)  [邻星验证(卫星20)]
+        → 该卫星未被点亮（空数据）
+
+
+[2] LDPC编码前消息示例 (卫星0):
+    原始帧 (前64字节): AABBCCDD10000100010300000001002103000000000002010108BA0AD00001000200008F265C7D000200010000CAC098F4A38486F5
+    子消息: Msg_ID=0000, Dest_ID=0000, Data_Length=2, Data=0101
+    (共3条子消息)
+[3] LDPC编码后消息示例 (卫星0):
+    编码数据 (前32字节): 55AA01A8AACD77673336ED910D0000006B800001AE061800000000000035C000
+    子消息: Msg_ID=0000, Dest_ID=0000, Data=0101 (开灯)
+[7] 执行结果: 成功
+    卫星0: 灯光开
+    卫星21: 灯光开
+    卫星18: 灯光开
+    卫星11: 灯光开
+    卫星15: 灯光开
+    卫星14: 灯光开
+================================
+

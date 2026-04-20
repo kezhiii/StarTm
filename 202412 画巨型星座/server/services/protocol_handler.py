@@ -261,86 +261,87 @@ class ProtocolHandler:
             "message": "Status report handling not yet implemented",
         }
     
-    def build_light_control_frame(
+    def build_light_control_frames(
         self,
         commands: list,
         frame_count: int = 0,
         packet_id: int = 0,
         neighbor_map: Optional[Dict[int, list]] = None,
-    ) -> bytes:
+    ) -> list:
         """
-        根据灯光指令列表构造LDPC编码的协议帧
+        根据灯光指令列表构造每颗卫星的LDPC编码协议帧
+        
+        每颗卫星一帧，每帧包含3条子消息：
+        - SubMsg[0]: 自身指令（被点亮时有数据，未点亮时为空）
+        - SubMsg[1]: 邻星1的指令数据（用于互校验，若邻星未点亮则为空）
+        - SubMsg[2]: 邻星2的指令数据（同上）
         
         Args:
-            commands: [{"sat_id": 0, "command": "on"}, {"sat_id": 3, "command": "off"}, ...]
+            commands: [{"sat_id": 0, "command": "on"}, ...]
             frame_count: 帧计数器
             packet_id: 数据包标识
             neighbor_map: {sat_id: [neighbor_id, ...], ...} 邻居拓扑
         
         Returns:
-            LDPC编码后的字节数据
+            列表，每项为 (dest_id, ldpc_bytes, frame) 元组
         """
-        messages = []
-        msg_counter = 0
-        
+        cmd_map = {}
         for cmd in commands:
             sat_id = cmd.get("sat_id", 0)
             command = cmd.get("command", "").lower()
-            
             if command == "on":
-                data = bytes([LightCommand.TURN_ON, LightCommand.STATE_ON])
+                cmd_map[sat_id] = bytes([LightCommand.TURN_ON, LightCommand.STATE_ON])
             elif command == "off":
-                data = bytes([LightCommand.TURN_OFF, LightCommand.STATE_OFF])
-            else:
-                continue
+                cmd_map[sat_id] = bytes([LightCommand.TURN_OFF, LightCommand.STATE_OFF])
+        
+        satellites_with_frames = set(cmd_map.keys())
+        if neighbor_map:
+            for sat_id in list(satellites_with_frames):
+                if sat_id in neighbor_map:
+                    for neighbor_id in neighbor_map[sat_id]:
+                        satellites_with_frames.add(neighbor_id)
+        
+        frames = []
+        for sat_id in sorted(satellites_with_frames):
+            messages = []
+            msg_counter = 0
             
-            msg = SubMessage(
+            self_data = cmd_map.get(sat_id, b'')
+            messages.append(SubMessage(
                 msg_id=msg_counter,
                 dest_id=sat_id,
-                data=data,
-            )
-            messages.append(msg)
+                data=self_data,
+            ))
             msg_counter += 1
             
             if neighbor_map and sat_id in neighbor_map:
                 for neighbor_id in neighbor_map[sat_id]:
-                    neighbor_cmd = next(
-                        (c for c in commands if c.get("sat_id") == neighbor_id),
-                        None
-                    )
-                    if neighbor_cmd:
-                        n_command = neighbor_cmd.get("command", "").lower()
-                        if n_command == "on":
-                            n_data = bytes([LightCommand.TURN_ON, LightCommand.STATE_ON])
-                        elif n_command == "off":
-                            n_data = bytes([LightCommand.TURN_OFF, LightCommand.STATE_OFF])
-                        else:
-                            continue
-                        
-                        neighbor_msg = SubMessage(
-                            msg_id=msg_counter,
-                            dest_id=neighbor_id,
-                            data=n_data,
-                        )
-                        messages.append(neighbor_msg)
-                        msg_counter += 1
+                    neighbor_data = cmd_map.get(neighbor_id, b'')
+                    messages.append(SubMessage(
+                        msg_id=msg_counter,
+                        dest_id=neighbor_id,
+                        data=neighbor_data,
+                    ))
+                    msg_counter += 1
+            
+            frame = TransferFrame(
+                version=1,
+                scid=0x0001,
+                vcid=0,
+                frame_count=frame_count,
+                packet_type=PacketType.LIGHT_CONTROL,
+                dest_id=sat_id,
+                packet_id=packet_id,
+                messages=messages,
+            )
+            
+            ldpc_bytes = frame.to_ldpc_bytes(self._codec)
+            frames.append((sat_id, ldpc_bytes, frame))
         
-        frame = TransferFrame(
-            version=1,
-            scid=0x0001,
-            vcid=0,
-            frame_count=frame_count,
-            packet_type=PacketType.LIGHT_CONTROL,
-            dest_id=0xFFFF,
-            packet_id=packet_id,
-            messages=messages,
-        )
+        if self._logger and frames:
+            first_sat_id, _, first_frame = frames[0]
+            self._logger.log_ldpc_decoded(first_frame)
+            self._logger.log_crc_verified(first_frame.verify_crc(), first_frame.crc)
+            self._logger.log_per_satellite_frames(frames)
         
-        ldpc_bytes = frame.to_ldpc_bytes(self._codec)
-        
-        if self._logger:
-            self._logger.log_ldpc_decoded(frame)
-            self._logger.log_crc_verified(frame.verify_crc(), frame.crc)
-            self._logger.log_submessages(messages)
-        
-        return ldpc_bytes
+        return frames

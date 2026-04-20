@@ -29,19 +29,21 @@ server/
 ├── propagators/            # 轨道递推引擎
 │   ├── base.py           # 推进器基类
 │   └── perturbed.py      # 摄动轨道推进器（JIT加速）
-├── protocol/               # 通信协议模块（新增）
+├── protocol/               # 通信协议模块
 │   ├── __init__.py        # 模块导出
 │   ├── constants.py       # 协议常量枚举（PacketType, MsgType, LightCommand）
 │   ├── transfer_frame.py  # 传输帧编解码（TransferFrame, SubMessage）
-│   └── ldpc_codec.py      # LDPC编解码器（基于 pyldpc 库）
+│   └── ldpc_codec.py      # LDPC编解码器（基于 pyldpc 库，seed=42）
 └── services/             # 业务服务层
     ├── ws_service.py      # WebSocket 服务（多客户端）
     ├── client_session.py  # 客户端会话管理（含协议帧处理）
     ├── propagation_service.py  # 递推服务
     ├── csv_service.py     # CSV 数据服务
-    ├── protocol_handler.py     # 协议消息处理器（新增）
-    ├── protocol_logger.py      # 协议日志记录器（新增）
-    └── light_control.py        # 灯光控制服务（新增）
+    ├── protocol_handler.py     # 协议消息处理器（含 build_light_control_frames）
+    ├── protocol_logger.py      # 协议日志记录器（含 log_per_satellite_frames）
+    ├── verify_service.py        # 互校验服务（Phase 2）
+    ├── neighbor_finder.py      # 邻居发现服务（基于轨道根数计算）
+    └── light_control.py        # 灯光控制服务
 ```
 
 ### 前端架构（JavaScript）
@@ -156,13 +158,21 @@ python server_main.py
 
 ## 通信协议
 
-### 传输帧结构
+### 传输帧结构（每颗卫星一帧）
 
 ```
 | Sync(4B) | Version+VCID(1B) | SCID(2B) | Frame_Count(2B) |
 | Packet_Type(1B) | Dest_ID(2B) | Packet_ID(2B) | Packet_Length(2B) |
 | Payload | CRC(4B) |
 ```
+
+**关键设计**：
+- **每颗卫星独立一帧**：`Dest_ID` 为目标卫星 ID（不使用 0xFFFF 广播）
+- **每帧包含 3 条子消息**：
+  - SubMsg[0]：自身指令（被点亮时有数据，未点亮时为空）
+  - SubMsg[1]：邻星1的指令数据（用于互校验，若邻星未点亮则为空）
+  - SubMsg[2]：邻星2的指令数据（同上）
+- **邻星帧携带被点亮星数据**：如卫星1的点亮帧中包含卫星0的数据，供卫星1与卫星0互校验
 
 **LDPC 外层封装**：
 ```
@@ -196,8 +206,21 @@ python server_main.py
 1. 发送的原始 Base64 数据
 2. LDPC 解码后的帧内容（Sync, Version, SCID, Packet_Type 等）
 3. CRC 校验结果
-4. 子消息解析结果（Msg_ID, Dest_ID, Data, 指令含义）
+4. **按卫星分组的消息队列**（每颗卫星一帧，每帧3条子消息）
 5. 执行结果（每颗卫星的灯光状态）
+
+**日志格式示例**：
+```
+[6] LDPC解码后完整消息队列（按卫星分组）:
+  ── 帧 Dest_ID=0x0000 (卫星0) ──
+    SubMsg[0]: Msg_ID=0000, Dest_ID=0000, Data=0101  [自身指令]
+    SubMsg[1]: Msg_ID=0001, Dest_ID=0002, Data=0101  [邻星验证(卫星2)]
+    SubMsg[2]: Msg_ID=0002, Dest_ID=0001, Data=0101  [邻星验证(卫星1)]
+  ── 帧 Dest_ID=0x0001 (卫星1) ──
+    SubMsg[0]: Msg_ID=0000, Dest_ID=0001, Data=0101  [自身指令]
+    SubMsg[1]: Msg_ID=0001, Dest_ID=0000, Data=0101  [邻星验证(卫星0)]
+    SubMsg[2]: Msg_ID=0002, Dest_ID=0005, Data=(空)  [邻星验证(卫星5)]
+```
 
 ## 关键文件说明
 
@@ -210,12 +233,14 @@ python server_main.py
 | `server/services/ws_service.py` | WebSocket 服务 | `WsService` - 多客户端管理 |
 | `server/services/client_session.py` | 客户端会话 | `ClientSession` - 含 `_handle_light_batch_command` |
 | `server/services/propagation_service.py` | 递推服务 | `PropagationService` - 轨道计算 |
+| `server/services/neighbor_finder.py` | 邻居发现 | `NeighborFinder` - 基于轨道根数计算 |
+| `server/services/verify_service.py` | 互校验服务 | `VerifyService` - Phase 2 互校验 |
 | `server/propagators/perturbed.py` | 轨道递推引擎 | `PerturbedOrbitPropagator` - JIT加速 |
 | `server/core/constellation.py` | 星座实体 | `Constellation` - 含 `apply_light_control` |
-| `server/protocol/ldpc_codec.py` | LDPC编解码 | `LDPCCodec` - 基于 pyldpc |
+| `server/protocol/ldpc_codec.py` | LDPC编解码 | `LDPCCodec` - 基于 pyldpc (seed=42) |
 | `server/protocol/transfer_frame.py` | 传输帧编解码 | `TransferFrame`, `SubMessage` |
-| `server/services/protocol_handler.py` | 协议处理器 | `ProtocolHandler` - 含 `build_light_control_frame` |
-| `server/services/protocol_logger.py` | 协议日志 | `ProtocolLogger` - 写入 `log/test_*.log` |
+| `server/services/protocol_handler.py` | 协议处理器 | `ProtocolHandler` - 含 `build_light_control_frames` |
+| `server/services/protocol_logger.py` | 协议日志 | `ProtocolLogger` - 含 `log_per_satellite_frames` |
 | `server/services/light_control.py` | 灯光控制 | `LightControlService` - 22颗卫星灯光管理 |
 
 ### 前端核心文件
@@ -350,7 +375,7 @@ test: 测试代码
 
 | 模块 | 待完善项 | 优先级 |
 |------|---------|--------|
-| **互校验** | 卫星间 VerifyRequest/VerifyResponse 流程（Phase 2） | 高 |
+| **互校验** | 实际互校验模拟流程（CRC失败→VerifyRequest→VerifyResponse→恢复） | 高 |
 | **LDPC** | 自适应 SNR 调整、错误纠正能力测试 | 中 |
 | **协议** | 遥测数据处理（PacketType.TELEMETRY） | 低 |
 | **协议** | 状态报告处理（PacketType.STATUS_REPORT） | 低 |
@@ -369,5 +394,5 @@ MIT License
 
 ---
 
-**最后更新**: 2026-04-17  
-**版本**: v3.0（多客户端架构 + 通信协议灯光控制）
+**最后更新**: 2026-04-20  
+**版本**: v3.1（每卫星独立帧 + 邻居验证数据 + 互校验服务）

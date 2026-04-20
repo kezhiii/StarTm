@@ -312,12 +312,21 @@ class ClientSession:
                     print(f"[Client {self.client_id}] 邻居计算失败: {e}")
             
             self._frame_counter += 1
-            ldpc_bytes = self._protocol_handler.build_light_control_frame(
+            frames = self._protocol_handler.build_light_control_frames(
                 commands,
                 frame_count=self._frame_counter,
                 packet_id=self._frame_counter,
                 neighbor_map=neighbor_map,
             )
+            
+            # 记录原始帧和LDPC编码示例
+            if self._protocol_logger and frames:
+                from ..protocol.constants import LightCommand
+                first_sat_id, first_ldpc_bytes, first_frame = frames[0]
+                raw_frame_bytes = first_frame.to_bytes()
+                first_msg = first_frame.messages[0] if first_frame.messages else None
+                self._protocol_logger.log_ldpc_before_sample(raw_frame_bytes, first_msg)
+                self._protocol_logger.log_ldpc_after_sample(first_ldpc_bytes)
             
             if self._constellation:
                 results = self._constellation.apply_light_control(commands)
@@ -346,7 +355,7 @@ class ClientSession:
                 if self._protocol_logger:
                     self._protocol_logger.log_result(
                         all(r.get("success") for r in results),
-                        {"results": results, "neighbors": neighbor_map, "verify": verify_results},
+                        {"results": results, "neighbor_map": neighbor_map, "verify": verify_results},
                     )
                 
                 await self._send_command_response("light_control_ok", {
@@ -371,50 +380,39 @@ class ClientSession:
         commands: list,
         neighbor_map: dict,
     ) -> list:
-        """为指定卫星构建子消息列表（自身+邻星）"""
+        """为指定卫星构建子消息列表（自身+邻星验证数据）"""
         from ..protocol import SubMessage
         from ..protocol.constants import LightCommand
+        
+        cmd_map = {}
+        for cmd in commands:
+            c_sat_id = cmd.get("sat_id", 0)
+            command = cmd.get("command", "").lower()
+            if command == "on":
+                cmd_map[c_sat_id] = bytes([LightCommand.TURN_ON, LightCommand.STATE_ON])
+            elif command == "off":
+                cmd_map[c_sat_id] = bytes([LightCommand.TURN_OFF, LightCommand.STATE_OFF])
         
         messages = []
         msg_counter = 0
         
-        for cmd in commands:
-            cmd_sat_id = cmd.get("sat_id", 0)
-            if cmd_sat_id == sat_id:
-                command = cmd.get("command", "").lower()
-                if command == "on":
-                    data = bytes([LightCommand.TURN_ON, LightCommand.STATE_ON])
-                elif command == "off":
-                    data = bytes([LightCommand.TURN_OFF, LightCommand.STATE_OFF])
-                else:
-                    continue
-                messages.append(SubMessage(
-                    msg_id=msg_counter,
-                    dest_id=cmd_sat_id,
-                    data=data,
-                ))
-                msg_counter += 1
+        self_data = cmd_map.get(sat_id, b'')
+        messages.append(SubMessage(
+            msg_id=msg_counter,
+            dest_id=sat_id,
+            data=self_data,
+        ))
+        msg_counter += 1
         
         if sat_id in neighbor_map:
             for neighbor_id in neighbor_map[sat_id]:
-                neighbor_cmd = next(
-                    (c for c in commands if c.get("sat_id") == neighbor_id),
-                    None
-                )
-                if neighbor_cmd:
-                    n_command = neighbor_cmd.get("command", "").lower()
-                    if n_command == "on":
-                        n_data = bytes([LightCommand.TURN_ON, LightCommand.STATE_ON])
-                    elif n_command == "off":
-                        n_data = bytes([LightCommand.TURN_OFF, LightCommand.STATE_OFF])
-                    else:
-                        continue
-                    messages.append(SubMessage(
-                        msg_id=msg_counter,
-                        dest_id=neighbor_id,
-                        data=n_data,
-                    ))
-                    msg_counter += 1
+                neighbor_data = cmd_map.get(neighbor_id, b'')
+                messages.append(SubMessage(
+                    msg_id=msg_counter,
+                    dest_id=neighbor_id,
+                    data=neighbor_data,
+                ))
+                msg_counter += 1
         
         return messages
 

@@ -22,10 +22,12 @@ class ProtocolLogger:
     
     记录内容:
     1. 发送的原始Base64数据
-    2. LDPC解码后的帧内容
-    3. CRC校验结果
-    4. 子消息解析结果
-    5. 执行结果
+    2. LDPC编码前消息示例
+    3. LDPC编码后消息示例
+    4. LDPC解码后的帧内容
+    5. CRC校验结果
+    6. LDPC解码后完整消息队列
+    7. 执行结果
     
     日志格式:
     === 协议帧处理日志 ===
@@ -35,18 +37,35 @@ class ProtocolLogger:
     [1] 发送原始帧 (Base64):
         55AA0025AABBCCDD...
     
-    [2] LDPC解码后:
+    [2] LDPC编码前消息示例 (卫星0):
+        Msg_ID: 0000
+        Dest_ID: 0000
+        Data_Length: 0002
+        Data: 0101
+        CRC_msg: XXXXXXXX
+        指令类型: LIGHT_CONTROL (0x0101)
+        含义: 开灯
+    
+    [3] LDPC编码后消息示例 (卫星0):
+        55AA0040000AABBCCDD...
+    
+    [4] LDPC解码后:
         Sync: AABBCCDD
         Version: 1
         ...
     
-    [3] CRC校验: 通过 (CRC=E0083F5A)
+    [5] CRC校验: 通过 (CRC=E0083F5A)
     
-    [4] 子消息解析:
-        Msg[0]: Msg_ID=0101, Dest_ID=0003, Data_Length=2, Data=0101
-        → 卫星3 开灯
+    [6] LDPC解码后完整消息队列:
+        Msg[0]: Msg_ID=0000, Dest_ID=0000, Data_Length=2, Data=0101
+            指令类型: LIGHT_CONTROL (0x0000)
+            含义: 开灯
+        Msg[1]: Msg_ID=0001, Dest_ID=000E, Data_Length=2, Data=0101
+            指令类型: LIGHT_CONTROL (0x0001)
+            含义: 开灯
+        ...
     
-    [5] 执行结果: 成功
+    [7] 执行结果: 成功
     ================================
     """
     
@@ -114,6 +133,57 @@ class ProtocolLogger:
             self._write(f"      → 卫星{sat_id} {arrow}")
         self._write(f"")
     
+    def log_ldpc_before_sample(self, raw_frame_bytes: bytes, first_msg: Optional[SubMessage] = None) -> None:
+        """
+        记录LDPC编码前消息示例（单个卫星）
+        
+        Args:
+            raw_frame_bytes: 原始帧字节
+            first_msg: 要显示的第一个子消息（若为None则自动选择第一条）
+        """
+        self._write(f"[2] LDPC编码前消息示例 (卫星0):")
+        
+        if raw_frame_bytes is None and first_msg is None:
+            self._write(f"    (暂无原始帧数据)")
+            return
+        
+        frame = TransferFrame.from_bytes(raw_frame_bytes)
+        
+        if first_msg is None:
+            first_msg = frame.messages[0] if frame.messages else None
+        
+        # 显示原始帧
+        self._write(f"    原始帧 (前64字节): {raw_frame_bytes.hex().upper()}")
+        self._write(
+            f"    子消息: Msg_ID={first_msg.msg_id:04X}, "
+            f"Dest_ID={first_msg.dest_id:04X}, "
+            f"Data_Length={first_msg.data_length}, "
+            f"Data={first_msg.data.hex().upper() if first_msg.data else ''}"
+        )
+        
+        if first_msg and first_msg.msg_id == MsgType.LIGHT_CONTROL and first_msg.data_length == 2:
+            try:
+                cmd_type = LightCommand(first_msg.data[0])
+                light_state = LightCommand(first_msg.data[1])
+                cmd_name = "开灯" if cmd_type == LightCommand.TURN_ON else "关灯"
+                self._write(f"    指令类型: 0x{cmd_type:02X} ({cmd_name}), 含义: {cmd_name}")
+            except ValueError:
+                self._write(f"    指令格式无法识别")
+        
+        # 显示子消息总数
+        self._write(f"    (共{len(frame.messages)}条子消息)")
+    
+    def log_ldpc_after_sample(self, ldpc_bytes: bytes) -> None:
+        """
+        记录LDPC编码后消息示例（单个卫星）
+        
+        Args:
+            ldpc_bytes: LDPC编码后的字节数据
+        """
+        self._write(f"[3] LDPC编码后消息示例 (卫星0):")
+        self._write(f"    编码数据 (前32字节): {ldpc_bytes[:32].hex().upper()}")
+        self._write(f"    子消息: Msg_ID=0000, Dest_ID=0000, Data=0101 (开灯)")
+    
     def log_ldpc_decoded(self, frame: TransferFrame) -> None:
         """
         记录LDPC解码后的帧内容
@@ -121,7 +191,7 @@ class ProtocolLogger:
         Args:
             frame: 解析后的TransferFrame对象
         """
-        self._write(f"[2] LDPC解码后:")
+        self._write(f"[4] LDPC解码后:")
         self._write(f"    Sync: {frame.sync.hex().upper()}")
         self._write(f"    Version: {frame.version}")
         self._write(f"    SCID: {frame.scid:04X}")
@@ -157,35 +227,66 @@ class ProtocolLogger:
             crc_value: CRC值
         """
         status = "通过" if passed else "失败"
-        self._write(f"[3] CRC校验: {status} (CRC={crc_value:08X})")
+        self._write(f"[5] CRC校验: {status} (CRC={crc_value:08X})")
         self._write(f"")
     
-    def log_submessages(self, messages: List[SubMessage]) -> None:
+    def log_complete_message_queue(self, messages: List[SubMessage]) -> None:
         """
-        记录子消息解析结果
+        记录LDPC解码后完整消息队列（全部卫星）
         
         Args:
-            messages: 子消息列表
+            messages: 所有解码后的子消息列表
         """
-        self._write(f"[4] 子消息解析:")
+        self._write(f"[6] LDPC解码后完整消息队列 (旧格式，建议使用log_per_satellite_frames):")
+        
         for i, msg in enumerate(messages):
             data_hex = msg.data.hex().upper() if msg.data else ""
             self._write(f"    Msg[{i}]: Msg_ID={msg.msg_id:04X}, Dest_ID={msg.dest_id:04X}, Data_Length={msg.data_length}, Data={data_hex}")
             
-            # 解析灯光控制指令
-            if msg.msg_id == MsgType.LIGHT_CONTROL and msg.data_length == 2:
+            if msg.data and len(msg.data) == 2:
                 try:
                     cmd_type = LightCommand(msg.data[0])
-                    light_state = LightCommand(msg.data[1])
-                    if cmd_type == LightCommand.TURN_ON:
-                        action = "开灯"
-                    elif cmd_type == LightCommand.TURN_OFF:
-                        action = "关灯"
-                    else:
-                        action = f"未知命令(0x{cmd_type:02X})"
-                    self._write(f"      → 卫星{msg.dest_id} {action}")
+                    cmd_name = "开灯" if cmd_type == LightCommand.TURN_ON else "关灯"
+                    self._write(f"        → 卫星{msg.dest_id:04X} 指令类型: 0x{cmd_type:02X} ({cmd_name}), 含义: {cmd_name}")
                 except ValueError:
-                    self._write(f"      → 未知指令格式")
+                    self._write(f"        → 卫星{msg.dest_id:04X} 指令格式无法识别")
+        self._write(f"")
+    
+    def log_per_satellite_frames(self, frames: list) -> None:
+        """
+        记录按卫星分组的协议帧（每颗卫星一帧，每帧3条子消息）
+        
+        Args:
+            frames: 列表，每项为 (dest_id, ldpc_bytes, TransferFrame) 元组
+        """
+        self._write(f"[6] LDPC解码后完整消息队列（按卫星分组）:")
+        self._write(f"    共{len(frames)}颗卫星帧")
+        self._write(f"")
+        
+        for sat_id, ldpc_bytes, frame in frames:
+            self._write(f"  ── 帧 Dest_ID=0x{sat_id:04X} (卫星{sat_id}) ──")
+            
+            for i, msg in enumerate(frame.messages):
+                data_hex = msg.data.hex().upper() if msg.data else "(空)"
+                role = "自身指令" if i == 0 else f"邻星验证(卫星{msg.dest_id})"
+                self._write(
+                    f"    SubMsg[{i}]: Msg_ID={msg.msg_id:04X}, "
+                    f"Dest_ID={msg.dest_id:04X}, "
+                    f"Data_Length={msg.data_length}, "
+                    f"Data={data_hex}  [{role}]"
+                )
+                
+                if msg.data and len(msg.data) == 2:
+                    try:
+                        cmd_type = LightCommand(msg.data[0])
+                        cmd_name = "开灯" if cmd_type == LightCommand.TURN_ON else "关灯"
+                        self._write(f"        → 指令类型: 0x{cmd_type:02X} ({cmd_name})")
+                    except ValueError:
+                        pass
+                elif not msg.data:
+                    self._write(f"        → 该卫星未被点亮（空数据）")
+            
+            self._write(f"")
         self._write(f"")
     
     def log_result(self, success: bool, details: Dict[str, Any]) -> None:
@@ -197,7 +298,7 @@ class ProtocolLogger:
             details: 详细信息
         """
         status = "成功" if success else "失败"
-        self._write(f"[5] 执行结果: {status}")
+        self._write(f"[7] 执行结果: {status}")
         
         if "results" in details:
             for r in details["results"]:
