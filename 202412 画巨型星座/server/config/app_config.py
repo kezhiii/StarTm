@@ -347,3 +347,120 @@ class AppConfig:
             f"constellation='{self.constellation.name}', "
             f"satellites={self.constellation_params.total_satellites})"
         )
+
+    @classmethod
+    async def load_from_db(cls, db_url: str = None) -> 'AppConfig':
+        """
+        从数据库加载配置。
+
+        优先级：DB > YAML 默认值
+        如果数据库连接失败，自动回退到 YAML。
+
+        Args:
+            db_url: 数据库连接字符串（如为 None 则从环境变量获取）
+
+        Returns:
+            AppConfig 实例
+        """
+        import json
+        from ..db.session import init_engine, get_session_factory
+        from ..db.repositories.config_repo import ConfigRepository
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        # 先加载默认 YAML 配置作为基础
+        try:
+            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            config_path = os.path.join(base_dir, "config", "default.yaml")
+            config = cls.load(config_path)
+        except FileNotFoundError:
+            config = cls()
+
+        # 尝试从数据库覆盖配置
+        if db_url is None:
+            from ..db.session import get_database_url
+            db_url = get_database_url()
+
+        try:
+            init_engine(db_url)
+            session_factory = get_session_factory()
+
+            async with session_factory() as session:
+                repo = ConfigRepository(session)
+                db_configs = await repo.load_all_to_dict()
+
+            if db_configs:
+                # 用数据库配置覆盖 YAML 配置
+                for section, values in db_configs.items():
+                    if hasattr(config, section):
+                        section_obj = getattr(config, section)
+                        if isinstance(section_obj, dict):
+                            section_obj.update(values)
+                        elif hasattr(section_obj, '__dataclass_fields__'):
+                            for key, value in values.items():
+                                if hasattr(section_obj, key):
+                                    setattr(section_obj, key, value)
+                config.validate()
+                print("[AppConfig] 已从数据库加载配置")
+            else:
+                print("[AppConfig] 数据库无配置，使用 YAML 默认值")
+
+        except Exception as e:
+            print(f"[AppConfig] 数据库加载失败（回退到 YAML）: {e}")
+
+        return config
+
+
+def seed_config_to_db(config: 'AppConfig', db_url: str = None) -> None:
+    """
+    将当前 AppConfig 写入数据库。
+
+    用于首次迁移：将 YAML 配置种子化到数据库。
+
+    Args:
+        config: AppConfig 实例
+        db_url: 数据库连接字符串
+    """
+    import json
+    import asyncio
+    from datetime import datetime
+    from ..db.session import init_engine, get_session_factory
+    from ..db.repositories.config_repo import ConfigRepository
+
+    if db_url is None:
+        from ..db.session import get_database_url
+        db_url = get_database_url()
+
+    init_engine(db_url)
+    session_factory = get_session_factory()
+
+    sections = [
+        ('server', config.server),
+        ('propagation', config.propagation),
+        ('constellation', config.constellation),
+        ('constellation_params', config.constellation_params),
+        ('physics', config.physics),
+        ('units', config.units),
+        ('csv', config.csv),
+        ('logging', config.logging),
+    ]
+
+    async def _seed():
+        async with session_factory() as session:
+            repo = ConfigRepository(session)
+            count = 0
+            for section_name, section_obj in sections:
+                if hasattr(section_obj, '__dataclass_fields__'):
+                    for field_name in section_obj.__dataclass_fields__:
+                        value = getattr(section_obj, field_name)
+                        key = f"{section_name}.{field_name}"
+                        await repo.set_config(
+                            key=key,
+                            value=value,
+                            section=section_name,
+                            description=f"Auto-seeded from YAML config",
+                            updated_by="seed_script",
+                        )
+                        count += 1
+            print(f"[Seed] 已写入 {count} 条配置到数据库")
+
+    asyncio.run(_seed())

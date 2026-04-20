@@ -9,7 +9,7 @@ const DBG = {
 
 // CSV 数据列索引（与后端 compact 格式对应）
 const COL = { sat_id: 0, a: 1, e: 2, i: 3, OMG: 4, omg: 5, f: 6, X: 7, Y: 8, Z: 9, Vx: 10, Vy: 11, Vz: 12 };
-const CSV_API_URL = 'http://127.0.0.1:8080/api/csv-data';
+const CSV_API_URL = '/api/csv-data';
 
 /**
  * 创建 CSV 管理器

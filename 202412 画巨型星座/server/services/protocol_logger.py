@@ -3,14 +3,17 @@
 
 记录协议帧的发送、LDPC解码、CRC校验、子消息解析和执行结果。
 每次启动后端服务创建新的日志文件：log/test_yyyymmddhhmmss.log
+支持双写：文件日志 + MySQL 数据库日志。
 """
 
 from __future__ import annotations
 import os
+import asyncio
 import base64
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional
+from collections import deque
 
 from ..protocol import TransferFrame, SubMessage
 from ..protocol.constants import PacketType, MsgType, LightCommand
@@ -69,12 +72,13 @@ class ProtocolLogger:
     ================================
     """
     
-    def __init__(self, log_dir: str = "log"):
+    def __init__(self, log_dir: str = "log", db_enabled: bool = False):
         """
         初始化协议日志记录器
         
         Args:
             log_dir: 日志目录（相对于项目根目录）
+            db_enabled: 是否启用数据库日志双写
         """
         self._log_dir = Path(log_dir)
         self._log_dir.mkdir(parents=True, exist_ok=True)
@@ -92,11 +96,80 @@ class ProtocolLogger:
             f.write("=" * 60 + "\n\n")
         
         print(f"[ProtocolLogger] 日志文件已创建: {self._log_path}")
+        
+        # 数据库双写配置
+        self._db_enabled = db_enabled
+        self._log_queue: deque = deque(maxlen=1000)
+        self._db_worker_task: Optional[asyncio.Task] = None
+        self._client_addr = "unknown"
+        
+        if db_enabled:
+            self._start_db_worker()
     
     @property
     def log_path(self) -> Path:
         """日志文件路径"""
         return self._log_path
+    
+    def set_client_addr(self, addr: str) -> None:
+        """设置当前客户端地址"""
+        self._client_addr = addr
+    
+    def _start_db_worker(self) -> None:
+        """启动数据库写入工作协程"""
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                self._db_worker_task = loop.create_task(self._db_worker())
+        except RuntimeError:
+            pass  # 无运行中的事件循环，延迟启动
+    
+    async def _db_worker(self) -> None:
+        """数据库写入工作协程（从队列中消费日志并写入 MySQL）"""
+        from ..db.session import init_engine, get_session_factory
+        from ..db.repositories.log_repo import LogRepository
+        
+        try:
+            init_engine()
+            session_factory = get_session_factory()
+        except Exception as e:
+            print(f"[ProtocolLogger] DB worker 初始化失败: {e}")
+            self._db_enabled = False
+            return
+        
+        while True:
+            try:
+                await asyncio.sleep(0.5)  # 批量写入间隔
+                
+                if not self._log_queue:
+                    continue
+                
+                # 批量取出
+                batch = []
+                while self._log_queue:
+                    batch.append(self._log_queue.popleft())
+                
+                async with session_factory() as session:
+                    repo = LogRepository(session)
+                    for log_entry in batch:
+                        await repo.create_log(**log_entry)
+                    await session.commit()
+                    
+            except Exception as e:
+                print(f"[ProtocolLogger] DB worker 错误: {e}")
+    
+    def _queue_db_log(self, log_type: str, **kwargs) -> None:
+        """将日志加入数据库写入队列"""
+        if not self._db_enabled:
+            return
+        
+        entry = {
+            "timestamp": datetime.utcnow(),
+            "client_addr": self._client_addr,
+            "log_type": log_type,
+            **kwargs,
+        }
+        self._log_queue.append(entry)
     
     def _write(self, content: str) -> None:
         """写入日志内容"""
@@ -132,6 +205,12 @@ class ProtocolLogger:
             arrow = "开灯" if command == "on" else "关灯"
             self._write(f"      → 卫星{sat_id} {arrow}")
         self._write(f"")
+        
+        self._queue_db_log(
+            "sent",
+            frame_data=raw_base64,
+            result_details={"commands": commands},
+        )
     
     def log_ldpc_before_sample(self, raw_frame_bytes: bytes, first_msg: Optional[SubMessage] = None) -> None:
         """
@@ -172,6 +251,22 @@ class ProtocolLogger:
         
         # 显示子消息总数
         self._write(f"    (共{len(frame.messages)}条子消息)")
+        
+        self._queue_db_log(
+            "ldpc_before",
+            frame_data=raw_frame_bytes.hex().upper() if raw_frame_bytes else None,
+            frame_details={
+                "msg_id": first_msg.msg_id if first_msg else None,
+                "dest_id": first_msg.dest_id if first_msg else None,
+                "data_length": first_msg.data_length if first_msg else None,
+            },
+            messages=[{
+                "msg_id": m.msg_id,
+                "dest_id": m.dest_id,
+                "data_length": m.data_length,
+                "data": m.data.hex().upper() if m.data else None,
+            } for m in frame.messages],
+        )
     
     def log_ldpc_after_sample(self, ldpc_bytes: bytes) -> None:
         """
@@ -183,6 +278,11 @@ class ProtocolLogger:
         self._write(f"[3] LDPC编码后消息示例 (卫星0):")
         self._write(f"    编码数据 (前32字节): {ldpc_bytes[:32].hex().upper()}")
         self._write(f"    子消息: Msg_ID=0000, Dest_ID=0000, Data=0101 (开灯)")
+        
+        self._queue_db_log(
+            "ldpc_after",
+            frame_data=ldpc_bytes[:32].hex().upper(),
+        )
     
     def log_ldpc_decoded(self, frame: TransferFrame) -> None:
         """
@@ -210,6 +310,22 @@ class ProtocolLogger:
         self._write(f"    Packet_Length: {self._calc_packet_length(frame)}")
         self._write(f"    CRC: {frame.crc:08X}")
         self._write(f"")
+        
+        self._queue_db_log(
+            "ldpc_decoded",
+            frame_details={
+                "sync": frame.sync.hex().upper(),
+                "version": frame.version,
+                "scid": frame.scid,
+                "vcid": frame.vcid,
+                "frame_count": frame.frame_count,
+                "packet_type": frame.packet_type,
+                "packet_type_name": pt_name,
+                "dest_id": frame.dest_id,
+                "packet_id": frame.packet_id,
+                "crc": frame.crc,
+            },
+        )
     
     def _calc_packet_length(self, frame: TransferFrame) -> int:
         """计算Payload长度"""
@@ -229,6 +345,12 @@ class ProtocolLogger:
         status = "通过" if passed else "失败"
         self._write(f"[5] CRC校验: {status} (CRC={crc_value:08X})")
         self._write(f"")
+        
+        self._queue_db_log(
+            "crc_verified",
+            crc_value=crc_value,
+            crc_passed=passed,
+        )
     
     def log_complete_message_queue(self, messages: List[SubMessage]) -> None:
         """
@@ -263,9 +385,11 @@ class ProtocolLogger:
         self._write(f"    共{len(frames)}颗卫星帧")
         self._write(f"")
         
+        all_messages = []
         for sat_id, ldpc_bytes, frame in frames:
             self._write(f"  ── 帧 Dest_ID=0x{sat_id:04X} (卫星{sat_id}) ──")
             
+            frame_messages = []
             for i, msg in enumerate(frame.messages):
                 data_hex = msg.data.hex().upper() if msg.data else "(空)"
                 role = "自身指令" if i == 0 else f"邻星验证(卫星{msg.dest_id})"
@@ -275,6 +399,14 @@ class ProtocolLogger:
                     f"Data_Length={msg.data_length}, "
                     f"Data={data_hex}  [{role}]"
                 )
+                
+                frame_messages.append({
+                    "msg_id": msg.msg_id,
+                    "dest_id": msg.dest_id,
+                    "data_length": msg.data_length,
+                    "data": data_hex,
+                    "role": role,
+                })
                 
                 if msg.data and len(msg.data) == 2:
                     try:
@@ -286,8 +418,17 @@ class ProtocolLogger:
                 elif not msg.data:
                     self._write(f"        → 该卫星未被点亮（空数据）")
             
+            all_messages.append({
+                "sat_id": sat_id,
+                "messages": frame_messages,
+            })
             self._write(f"")
         self._write(f"")
+        
+        self._queue_db_log(
+            "message_queue",
+            messages=all_messages,
+        )
     
     def log_result(self, success: bool, details: Dict[str, Any]) -> None:
         """
@@ -316,6 +457,12 @@ class ProtocolLogger:
         
         self._write(f"================================")
         self._write(f"")
+        
+        self._queue_db_log(
+            "result",
+            result_success=success,
+            result_details=details,
+        )
     
     def log_error(self, error_type: str, message: str, client_addr: str = "unknown") -> None:
         """
@@ -335,3 +482,8 @@ class ProtocolLogger:
         self._write(f"错误信息: {message}")
         self._write(f"================================")
         self._write(f"")
+        
+        self._queue_db_log(
+            "error",
+            result_details={"error_type": error_type, "message": message},
+        )

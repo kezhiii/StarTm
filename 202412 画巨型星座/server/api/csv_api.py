@@ -1,6 +1,11 @@
 """
 CSV API 处理器
 
+⚠️ 已废弃 (DEPRECATED) - 2026-04-20
+此文件已被 `server/fastapi_app/routes/csv.py` 替代。
+保留仅用于向后兼容 `main.py` 旧入口点。
+新入口点请使用 `main_fastapi.py`。
+
 提供 HTTP API 用于 CSV 数据查询和下载。
 """
 

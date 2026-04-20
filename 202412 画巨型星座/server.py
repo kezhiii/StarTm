@@ -1,6 +1,13 @@
 import http.server
 import socketserver
 import os
+import warnings
+
+warnings.warn(
+    "server.py is deprecated. Use main_fastapi.py instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 PORT = 8000
 DIRECTORY = os.path.dirname(os.path.abspath(__file__))
