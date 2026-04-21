@@ -44,8 +44,11 @@ class SatelliteRepository:
 
     async def count(self) -> int:
         """获取卫星总数"""
-        result = await self.session.execute(select(Satellite.sat_id))
-        return len(result.all())
+        from sqlmodel import func
+        result = await self.session.execute(
+            select(func.count(Satellite.id))
+        )
+        return result.scalar() or 0
 
     async def create(self, satellite: Satellite) -> Satellite:
         """创建单颗卫星"""
@@ -70,6 +73,40 @@ class SatelliteRepository:
         await self.session.commit()
         await self.session.refresh(satellite)
         return True
+
+    async def bulk_update_light_states(self, light_state_map: dict[int, bool]) -> int:
+        """
+        批量更新多颗卫星的灯光状态（单次 commit）。
+
+        Args:
+            light_state_map: {sat_id: light_state, ...}
+
+        Returns:
+            更新的记录数
+        """
+        from datetime import datetime
+        from sqlmodel import update, col
+
+        if not light_state_map:
+            return 0
+
+        sat_ids = list(light_state_map.keys())
+        result = await self.session.execute(
+            select(Satellite).where(Satellite.sat_id.in_(sat_ids))
+        )
+        satellites = result.scalars().all()
+
+        count = 0
+        now = datetime.utcnow()
+        for sat in satellites:
+            if sat.sat_id in light_state_map:
+                sat.light_state = light_state_map[sat.sat_id]
+                sat.updated_at = now
+                count += 1
+
+        if count > 0:
+            await self.session.commit()
+        return count
 
     async def update_orbit_elements(
         self,

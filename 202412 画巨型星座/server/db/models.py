@@ -106,3 +106,23 @@ class SatelliteNeighbor(SQLModel, table=True):
     neighbor_id: int = Field(primary_key=True, foreign_key="satellites.sat_id", description="邻星编号")
     distance_km: float = Field(description="计算时的距离 (km)")
     calculated_at: datetime = Field(default_factory=datetime.utcnow, description="计算时间")
+
+
+class LightSchedule(SQLModel, table=True):
+    """
+    灯光调度计划表
+
+    存储卫星灯光的定时控制计划，支持绝对时间和相对时间两种调度模式。
+    """
+    __tablename__ = "light_schedules"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    sat_id: int = Field(index=True, description="卫星编号")
+    schedule_type: str = Field(max_length=16, description="调度类型：absolute=仿真绝对时间, relative=相对仿真步, wallclock=真实时间")
+    trigger_time: Optional[str] = Field(default=None, max_length=32, description="仿真绝对触发时间戳，如 '20210817053301'")
+    trigger_step: Optional[int] = Field(default=None, description="相对触发步（仿真步计数器）")
+    trigger_at: Optional[datetime] = Field(default=None, description="真实触发时间（UTC），用于 wallclock 模式")
+    command: str = Field(max_length=8, description="灯光命令：on 或 off")
+    duration_seconds: Optional[int] = Field(default=None, description="灯光持续时长（秒），None表示永久")
+    executed: bool = Field(default=False, description="是否已执行")
+    created_at: datetime = Field(default_factory=datetime.utcnow, description="创建时间")

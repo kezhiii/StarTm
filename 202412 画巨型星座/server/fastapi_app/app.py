@@ -15,6 +15,7 @@ from .routes.csv import router as csv_router
 from .routes.config import router as config_router
 from .routes.logs import router as logs_router
 from .routes.constellation import router as constellation_router
+from .routes.schedules import router as schedules_router
 from .ws.router import router as ws_router
 from .ws.manager import ConnectionManager
 from .lifespan import lifespan
@@ -55,6 +56,8 @@ def create_app(
         lifespan=lifespan if db_enabled else None,
     )
     app.state.constellation = constellation if db_enabled else None
+    app.state.csv_service = csv_service
+    app.state.config = config
 
     # CORS 中间件
     app.add_middleware(
@@ -74,23 +77,14 @@ def create_app(
         app.include_router(config_router)
         app.include_router(logs_router)
         app.include_router(constellation_router)
+        app.include_router(schedules_router)
 
     # WebSocket 管理器（如果提供了工厂函数）
     if propagation_service_factory:
-        # 获取共享的 session_factory（避免每个 WS 连接创建新引擎）
-        session_factory = None
-        if db_enabled:
-            from ..db.session import get_session_factory
-            try:
-                session_factory = get_session_factory()
-            except RuntimeError:
-                pass  # DB not initialized yet
-
         ws_manager = ConnectionManager(
             propagation_service_factory=propagation_service_factory,
             constellation=constellation,
             protocol_logger=protocol_logger,
-            session_factory=session_factory,
         )
         app.state.ws_manager = ws_manager
         print(f"[App] WebSocket 管理器已初始化（最大 {ConnectionManager.MAX_CLIENTS} 客户端）")

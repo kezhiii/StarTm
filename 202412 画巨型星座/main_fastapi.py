@@ -75,9 +75,9 @@ class FastAPIApplication:
         )
         print(f"[FastAPI-App] 灯光控制星座初始化成功")
 
-        # 创建协议日志记录器
+        # 创建协议日志记录器（启用 DB 双写）
         from server.services.protocol_logger import ProtocolLogger
-        protocol_logger = ProtocolLogger(log_dir="log")
+        protocol_logger = ProtocolLogger(log_dir="log", db_enabled=True)
 
         # 创建传播服务工厂（每个 WebSocket 客户端独立实例）
         def create_propagation_service_factory():

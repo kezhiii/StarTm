@@ -93,6 +93,28 @@ export function connectWebSocket(appState, updateCallbacks, autoPlay = false) {
                 return;
             }
             
+            // 保存当前仿真步和时间戳（用于灯光计划的时间参考）
+            if (msg.current_step !== undefined) {
+                ws.currentStep = msg.current_step;
+            }
+            if (msg.current_timestamp) {
+                ws.currentTimestamp = msg.current_timestamp;
+            }
+            
+            // 首次数据时初始化灯光管理器
+            if (msg.is_first && appState.lightManager && msg.data.length > 0) {
+                const satCount = msg.data[0].length;
+                appState.lightManager.init(satCount);
+                console.log(`[WS] 初始化 ${satCount} 颗卫星的灯光状态`);
+            }
+            
+            // 同步灯光状态（在 init 之后）
+            if (msg.light_states && appState.lightManager) {
+                Object.entries(msg.light_states).forEach(([satId, isOn]) => {
+                    appState.lightManager.setLight(parseInt(satId), isOn);
+                });
+            }
+            
             // 添加到队列
             for (let i = 0; i < msg.data.length; i++) {
                 ws.dataQueue.push(msg.data[i]);
@@ -203,6 +225,20 @@ export function runWsPlayback(appState, updateCallbacks) {
         appState.interpolation.prevFrameData = appState.interpolation.currFrameData;
         appState.interpolation.currFrameData = stepData;
         ws.lastStepData = stepData;
+
+        // 记录当前播放帧的时间戳（用于灯光计划）
+        if (stepData && stepData.length > 0 && stepData[0].length > 0) {
+            ws.currentPlaybackTimestamp = stepData[0][0];
+            ws.currentPlaybackStep = stepData[0][1]; // sat_id，但实际是帧索引
+        }
+
+        // 前端自主执行灯光计划
+        if (appState.lightScheduleManager && stepData && stepData.length > 0) {
+            const timestamp = stepData[0][0];
+            if (timestamp && timestamp.length === 14) {
+                appState.lightScheduleManager.checkAndExecute(timestamp);
+            }
+        }
 
         // 初始化地球自转基准时间
         if (appState.earthRotation.startTime === null && stepData && stepData.length > 0) {

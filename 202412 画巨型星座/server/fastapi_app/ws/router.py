@@ -6,7 +6,7 @@ FastAPI WebSocket 路由
 
 from __future__ import annotations
 import asyncio
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 
 from .manager import ConnectionManager
 
@@ -47,11 +47,12 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
 
 
 @router.get("/ws/stats")
-async def get_ws_stats():
+async def get_ws_stats(request: Request):
     """获取 WebSocket 服务统计信息"""
-    # This is an HTTP endpoint, accessed via regular request
-    # We need to get the manager from app state via dependency
-    from fastapi import Request
-    # For HTTP endpoints in the same router, we can't access app.state directly
-    # Return a placeholder; stats can be accessed via app.state.ws_manager
-    return {"status": "ok", "note": "Use app.state.ws_manager for stats"}
+    manager: ConnectionManager = request.app.state.ws_manager
+    if manager is None:
+        return {"error": "WebSocket 服务未初始化"}
+    return {
+        **manager.stats.to_dict(),
+        "clients": manager.get_all_client_stats(),
+    }

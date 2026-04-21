@@ -60,7 +60,7 @@ def init_engine(database_url: Optional[str] = None) -> None:
     _session_factory = async_sessionmaker(
         bind=_engine,
         class_=AsyncSession,
-        expire_on_commit=False,
+        expire_on_commit=True,  # commit 后过期缓存，确保后续查询从 DB 重新加载
     )
     # Display database name without URL encoding for readability
     display_url = url.split("@")[-1] if "@" in url else url

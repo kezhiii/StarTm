@@ -437,6 +437,19 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
                 interpState.currFrameData = stepData;
                 wsState.lastStepData = stepData;
                 
+                // 记录当前播放帧的时间戳（用于灯光计划）
+                if (stepData && stepData.length > 0 && stepData[0].length > 0) {
+                    wsState.currentPlaybackTimestamp = stepData[0][0];
+                }
+                
+                // 前端自主执行灯光计划
+                if (appState.lightScheduleManager && stepData && stepData.length > 0) {
+                    const timestamp = stepData[0][0];
+                    if (timestamp && timestamp.length === 14) {
+                        appState.lightScheduleManager.checkAndExecute(timestamp);
+                    }
+                }
+                
                 // 关键修复：帧切换时重置渲染累积器，开始新的插值周期
                 wsState.renderAccumulator = 0;
                 wsState.renderLastTime = performance.now();
@@ -729,6 +742,14 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
                     const isValid = msg.data.every(d => Array.isArray(d) && d.length >= 14);
                     if (!isValid) { DBG.warn('格式错误'); return; }
 
+                    // 保存当前仿真步和时间戳（用于灯光计划的时间参考）
+                    if (msg.current_step !== undefined) {
+                        wsState.currentStep = msg.current_step;
+                    }
+                    if (msg.current_timestamp) {
+                        wsState.currentTimestamp = msg.current_timestamp;
+                    }
+
                     // 关键修复：记录数据到达信息
                     if (msg.is_first) {
                         DBG.log(`收到首帧数据: ${msg.data.length} 帧, 队列总数: ${wsState.dataQueue.length + msg.data.length}`);
@@ -738,13 +759,18 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
                     for (let i = 0; i < msg.data.length; i++) wsState.dataQueue.push(msg.data[i]);
                     while (wsState.dataQueue.length > WS_MAX_QUEUE_SIZE) wsState.dataQueue.shift();
 
-                    if (msg.is_first) {
-                        // 初始化灯光管理器（根据 WS 数据中的卫星数量）
-                        if (appState.lightManager && wsState.dataQueue.length > 0) {
-                            const satCount = msg.data[0].length; // 每帧的卫星数
-                            appState.lightManager.init(satCount);
-                            DBG.log(`[LIGHT] WS 模式已初始化 ${satCount} 颗卫星的灯光状态`);
-                        }
+                    // 初始化灯光管理器（必须在同步灯光状态之前）
+                    if (msg.is_first && appState.lightManager && msg.data.length > 0) {
+                        const satCount = msg.data[0].length; // 每帧的卫星数
+                        appState.lightManager.init(satCount);
+                        DBG.log(`[LIGHT] WS 模式已初始化 ${satCount} 颗卫星的灯光状态`);
+                    }
+
+                    // 同步灯光状态（在 init 之后）
+                    if (msg.light_states && appState.lightManager) {
+                        Object.entries(msg.light_states).forEach(([satId, isOn]) => {
+                            appState.lightManager.setLight(parseInt(satId), isOn);
+                        });
                     }
 
                     // 请求-响应模式：收到数据即恢复播放

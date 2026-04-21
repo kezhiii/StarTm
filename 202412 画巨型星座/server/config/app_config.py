@@ -18,8 +18,8 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 class ServerConfig(BaseModel):
     """服务器配置"""
     http_port: int = Field(default=8000, ge=1, le=65535)
-    csv_api_port: int = Field(default=8080, ge=1, le=65535)
-    ws_port: int = Field(default=8765, ge=1, le=65535)
+    csv_api_port: int = Field(default=8080, ge=1, le=65535, description="仅旧模式使用，FastAPI 模式已统一为 http_port")
+    ws_port: int = Field(default=8765, ge=1, le=65535, description="仅旧模式使用，FastAPI 模式已统一为 http_port")
     ws_host: str = Field(default="0.0.0.0")
 
 

@@ -193,6 +193,128 @@
         }
     }
     </script>
+
+    <!-- 加载状态覆盖层 -->
+    <div id="loading-overlay" style="
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: #0a0a1e;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        z-index: 9999;
+        color: #4488ff;
+        font-family: 'Share Tech Mono', monospace;
+    ">
+        <div style="font-size: 24px; margin-bottom: 20px;">◉ 轨道星座观测终端</div>
+        <div id="loading-status" style="font-size: 14px; color: #888;">正在初始化系统...</div>
+        <div id="loading-retry" style="font-size: 12px; color: #666; margin-top: 10px; display: none;"></div>
+    </div>
+
+    <!-- 模块加载错误检测与自动重试 -->
+    <script>
+    (function() {
+        let retryCount = 0;
+        const maxRetries = 3;
+        let loadErrorDetected = false;
+        let appReady = false;
+
+        function updateStatus(msg, isError) {
+            const status = document.getElementById('loading-status');
+            const retry = document.getElementById('loading-retry');
+            if (status) {
+                status.textContent = msg;
+                status.style.color = isError ? '#ff4444' : '#888';
+            }
+            if (retry && retryCount > 0) {
+                retry.style.display = 'block';
+                retry.textContent = `重试次数: ${retryCount}/${maxRetries}`;
+            }
+        }
+
+        function hideOverlay() {
+            if (appReady) return; // 已隐藏过
+            appReady = true;
+            const overlay = document.getElementById('loading-overlay');
+            if (overlay) {
+                overlay.style.transition = 'opacity 0.5s';
+                overlay.style.opacity = '0';
+                setTimeout(() => overlay.remove(), 500);
+            }
+        }
+
+        function autoReload() {
+            if (appReady) return; // 应用已就绪，不重试
+            retryCount++;
+            if (retryCount > maxRetries) {
+                updateStatus('加载失败，请检查网络连接后手动刷新页面', true);
+                const retry = document.getElementById('loading-retry');
+                if (retry) {
+                    retry.innerHTML = '<button onclick="location.reload()" style="background:#2a4a6a;border:1px solid #4488ff;color:#fff;padding:5px 15px;border-radius:3px;cursor:pointer;margin-top:10px;">手动刷新</button>';
+                }
+                return;
+            }
+
+            updateStatus(`模块加载失败，${2 ** retryCount}秒后自动重试...`, true);
+            setTimeout(() => {
+                if (!appReady) location.reload();
+            }, (2 ** retryCount) * 1000);
+        }
+
+        // 检测全局错误
+        window.onerror = function(msg, url, line, col, error) {
+            const errorStr = String(msg);
+            if (errorStr.includes('import') || errorStr.includes('module') || errorStr.includes('ERR_CONNECTION')) {
+                loadErrorDetected = true;
+                autoReload();
+                return true;
+            }
+            return false;
+        };
+
+        // 检测未捕获的 Promise 错误（import() 失败）
+        window.addEventListener('unhandledrejection', function(e) {
+            const errorStr = String(e.reason);
+            if (errorStr.includes('import') || errorStr.includes('module') || errorStr.includes('ERR_CONNECTION') || errorStr.includes('Failed to fetch')) {
+                loadErrorDetected = true;
+                e.preventDefault();
+                autoReload();
+            }
+        });
+
+        // 检测 Canvas 创建（应用成功初始化的标志）
+        const observer = new MutationObserver(function(mutations) {
+            if (appReady) return;
+            const canvas = document.querySelector('#canvasContainer canvas');
+            if (canvas) {
+                updateStatus('系统初始化完成');
+                hideOverlay();
+                observer.disconnect();
+            }
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+
+        // 备用：30秒超时（只有未检测到 Canvas 且未出错时才重试）
+        setTimeout(function() {
+            if (!appReady && !loadErrorDetected) {
+                updateStatus('系统初始化超时，正在重试...', true);
+                autoReload();
+            }
+        }, 30000);
+
+        // 页面 load 事件后备
+        window.addEventListener('load', function() {
+            setTimeout(function() {
+                const canvas = document.querySelector('#canvasContainer canvas');
+                if (canvas && !appReady) {
+                    hideOverlay();
+                }
+            }, 2000);
+        });
+    })();
+    </script>
+
     <script type="module" src="app.js"></script>
 </body>
 </html>

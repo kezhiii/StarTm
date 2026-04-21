@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { parseTimestamp, dateToJD, calcGMST, eciToEcef, ecefToLocal } from '../math-utils.js';
 import { DEG, RE_KM, RE_3D } from '../config.js';
 import { createProtocolConfirmBar } from './protocol-confirm-bar.js';
+import { createLightTimeline } from '../light-timeline.js';
 
 const PANEL_WIDTH = 400;
 const PANEL_HEIGHT = 400;
@@ -17,6 +18,8 @@ export function createConstellationPanel(appState) {
     let satPositions = []; // 存储卫星在面板中的 2D 位置 {x, y, idx}
     let isVisible = false;
     let confirmBar = null;
+    let timeline = null;
+    let timelineToggle = null;
 
     /**
      * 初始化面板
@@ -31,7 +34,8 @@ export function createConstellationPanel(appState) {
             left: 50%;
             transform: translate(-50%, -50%);
             width: ${PANEL_WIDTH}px;
-            height: ${PANEL_HEIGHT + 100}px;
+            height: auto;
+            min-height: ${PANEL_HEIGHT + 160}px;
             background: rgba(10, 10, 30, 0.95);
             border: 2px solid #4488ff;
             border-radius: 10px;
@@ -46,19 +50,60 @@ export function createConstellationPanel(appState) {
         // 标题栏
         const titleBar = document.createElement('div');
         titleBar.style.cssText = 'width: 100%; display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;';
-        
+
         const title = document.createElement('span');
         title.textContent = '🛰️ 卫星编队灯光控制';
         title.style.cssText = 'color: #fff; font-size: 16px; font-weight: bold;';
-        
+
+        const rightButtons = document.createElement('div');
+        rightButtons.style.cssText = 'display: flex; gap: 8px; align-items: center;';
+
+        // 时间线切换按钮
+        timelineToggle = document.createElement('button');
+        timelineToggle.textContent = '⏱ 时间线';
+        timelineToggle.style.cssText = `
+            background: #2a4a6a;
+            border: 1px solid #4488ff;
+            color: #fff;
+            padding: 3px 10px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+        `;
+        timelineToggle.onclick = toggleTimeline;
+
         const closeBtn = document.createElement('button');
         closeBtn.textContent = '✕';
         closeBtn.style.cssText = 'background: none; border: none; color: #fff; font-size: 20px; cursor: pointer;';
         closeBtn.onclick = hide;
 
+        rightButtons.appendChild(timelineToggle);
+        rightButtons.appendChild(closeBtn);
         titleBar.appendChild(title);
-        titleBar.appendChild(closeBtn);
+        titleBar.appendChild(rightButtons);
         panel.appendChild(titleBar);
+
+        // 主内容区：左右两栏（右栏默认隐藏）
+        const mainContent = document.createElement('div');
+        mainContent.style.cssText = `
+            display: flex;
+            flex-direction: row;
+            gap: 10px;
+            width: 100%;
+            justify-content: center;
+        `;
+
+        // 左栏：画布 + 确认栏
+        const leftColumn = document.createElement('div');
+        leftColumn.id = 'leftColumn';
+        leftColumn.style.cssText = `
+            width: ${PANEL_WIDTH}px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+            flex-shrink: 0;
+        `;
 
         // 画布
         canvas = document.createElement('canvas');
@@ -66,7 +111,7 @@ export function createConstellationPanel(appState) {
         canvas.height = PANEL_HEIGHT;
         canvas.style.cssText = 'border: 1px solid #333; border-radius: 5px; cursor: pointer;';
         canvas.onclick = handleCanvasClick;
-        panel.appendChild(canvas);
+        leftColumn.appendChild(canvas);
 
         ctx = canvas.getContext('2d');
 
@@ -75,7 +120,26 @@ export function createConstellationPanel(appState) {
             onConfirm: handleConfirmSend,
             onClear: handleClearSelection,
         });
-        confirmBar.init(panel);
+        confirmBar.init(leftColumn);
+
+        // 右栏：时间线（默认隐藏）
+        const rightColumn = document.createElement('div');
+        rightColumn.id = 'rightColumn';
+        rightColumn.style.cssText = `
+            width: ${PANEL_WIDTH}px;
+            display: none;
+            flex-direction: column;
+            gap: 6px;
+            flex-shrink: 0;
+        `;
+
+        // 初始化时间线
+        timeline = createLightTimeline(appState);
+        timeline.init(rightColumn);
+
+        mainContent.appendChild(leftColumn);
+        mainContent.appendChild(rightColumn);
+        panel.appendChild(mainContent);
 
         // 添加到页面
         document.body.appendChild(panel);
@@ -104,6 +168,37 @@ export function createConstellationPanel(appState) {
      */
     function handleClearSelection() {
         render();
+    }
+
+    /**
+     * 切换时间线显示
+     */
+    function toggleTimeline() {
+        const rightColumn = panel.querySelector('#rightColumn');
+        const leftColumn = panel.querySelector('#leftColumn');
+        if (!rightColumn) return;
+
+        const isHidden = rightColumn.style.display === 'none';
+        if (isHidden) {
+            // 显示右栏，调整面板宽度
+            rightColumn.style.display = 'flex';
+            panel.style.width = `${PANEL_WIDTH * 2 + 20}px`;
+            timelineToggle.textContent = '⏱ 收起';
+            timelineToggle.style.background = '#4a2a2a';
+            timelineToggle.style.borderColor = '#ff4444';
+            // 显示时间线并加载数据
+            if (timeline) {
+                timeline.show();
+                timeline.loadSchedules();
+            }
+        } else {
+            // 隐藏右栏，恢复面板宽度
+            rightColumn.style.display = 'none';
+            panel.style.width = `${PANEL_WIDTH}px`;
+            timelineToggle.textContent = '⏱ 时间线';
+            timelineToggle.style.background = '#2a4a6a';
+            timelineToggle.style.borderColor = '#4488ff';
+        }
     }
 
     /**

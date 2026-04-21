@@ -53,12 +53,10 @@ class ConnectionManager:
         propagation_service_factory: Callable[[], PropagationService],
         constellation: Optional[Any] = None,
         protocol_logger: Optional[Any] = None,
-        session_factory: Optional[async_sessionmaker] = None,
     ):
         self._service_factory = propagation_service_factory
         self._constellation = constellation
         self._protocol_logger = protocol_logger
-        self._session_factory = session_factory
         self._clients: Dict[str, ClientSession] = {}
         self._stats = ManagerStats()
 
@@ -69,6 +67,18 @@ class ConnectionManager:
     @property
     def stats(self) -> ManagerStats:
         return self._stats
+
+    def _get_session_factory(self) -> Optional[async_sessionmaker]:
+        """
+        动态获取共享的 session_factory。
+        
+        在 connect() 时调用，此时 lifespan 已执行完毕，DB 引擎已初始化。
+        """
+        try:
+            from ...db.session import get_session_factory
+            return get_session_factory()
+        except RuntimeError:
+            return None
 
     async def connect(self, websocket: WebSocket, client_id: str) -> Optional[ClientSession]:
         """
@@ -92,13 +102,28 @@ class ConnectionManager:
             self._stats.peak_connections = self._stats.active_connections
 
         service = self._service_factory()
+        # 在连接建立时获取 session_factory（此时 DB 引擎已初始化）
+        session_factory = self._get_session_factory()
+
+        # 创建灯光调度器并注入到 PropagationService
+        if session_factory:
+            try:
+                from ...services.light_scheduler import LightScheduler
+                scheduler = LightScheduler(
+                    session_factory=session_factory,
+                    constellation=service.constellation,  # 使用 service 的星座，确保状态同步
+                )
+                service._light_scheduler = scheduler
+            except Exception as e:
+                print(f"[WS-Manager] 灯光调度器初始化失败: {e}")
+
         session = ClientSession(
             websocket=websocket,
             client_id=client_id,
             service=service,
-            constellation=self._constellation,
+            constellation=service.constellation,  # 使用 service 的星座，确保调度器和前端看到的是同一个对象
             protocol_logger=self._protocol_logger,
-            session_factory=self._session_factory,
+            session_factory=session_factory,
         )
         self._clients[client_id] = session
 

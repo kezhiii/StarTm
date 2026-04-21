@@ -23,6 +23,7 @@ import { createPlaybackManager } from './managers/playback-manager.js';
 import { createInputManager } from './managers/input-manager.js';
 import { createCsvManager } from './managers/csv-manager.js';
 import { createLightManager } from './modules/light-manager.js';
+import { createLightScheduleManager } from './modules/light-schedule-manager.js';
 import { createLogger, loggerConfig, LOG } from './core/logger.js';
 
 // 创建全局状态
@@ -345,6 +346,11 @@ async function init() {
         // 2.5 初始化灯光管理器（传入获取 sceneObjects 的函数，延迟获取）
         lightManager = createLightManager(() => appState.sceneObjects);
         appState.lightManager = lightManager;  // 存入 appState 供其他模块访问
+
+        // 2.5.1 初始化灯光计划管理器（前端自主控制灯光计划）
+        const lightScheduleManager = createLightScheduleManager(appState);
+        appState.lightScheduleManager = lightScheduleManager;
+        await lightScheduleManager.init();
 
         // 2.6 初始化卫星编队面板
         constellationPanel = createConstellationPanelModule(appState);

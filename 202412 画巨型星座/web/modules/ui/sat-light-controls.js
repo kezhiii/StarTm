@@ -59,6 +59,11 @@ export function initSatLightControls(appState, config = {}) {
                 if (appState.lightManager) {
                     appState.lightManager.setLight(i, checkbox.checked);
                     updateRowStyle(row, checkbox.checked);
+                    
+                    // 设置手动覆盖（30秒内自动计划不生效）
+                    if (appState.lightScheduleManager) {
+                        appState.lightScheduleManager.setManualOverride(i, checkbox.checked);
+                    }
                 }
             });
 

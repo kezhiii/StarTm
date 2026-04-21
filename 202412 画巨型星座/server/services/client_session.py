@@ -104,7 +104,7 @@ class ClientSession:
             for i in range(10):
                 while self.service.buffer_length >= self.service._buffer.capacity:
                     await asyncio.sleep(0.01)
-                if not self.service.compute_step(dt=1.0):
+                if not await self.service.async_compute_step(dt=1.0):
                     print(f"[Client {self.client_id}] 初始计算失败")
                     return
                 self.stats.frames_computed += 1
@@ -128,10 +128,14 @@ class ClientSession:
                     await self._handle_message(msg)
                     
                 except asyncio.TimeoutError:
-                    # 无消息，继续循环
                     pass
                 except Exception as e:
-                    if "ConnectionClosed" in str(type(e).__name__):
+                    error_str = str(e)
+                    error_type = str(type(e).__name__)
+                    # WebSocket 已断开时的多种错误表现
+                    if ("ConnectionClosed" in error_type or
+                            "disconnect" in error_str.lower() or
+                            "closed" in error_str.lower()):
                         print(f"[Client {self.client_id}] 连接已关闭")
                         break
                     print(f"[Client {self.client_id}] 处理消息时出错: {e}")
@@ -191,7 +195,7 @@ class ClientSession:
         # 按需计算
         computed = 0
         for i in range(request_count):
-            if not self.service.compute_step(dt=1.0):
+            if not await self.service.async_compute_step(dt=1.0):
                 break
             computed += 1
             self.stats.frames_computed += 1
@@ -207,7 +211,7 @@ class ClientSession:
             self.stats.frames_sent += len(frames)
             
     async def _send_data(self, frames: List[FrameData], is_first: bool = False) -> None:
-        """发送数据到客户端"""
+        """发送数据到客户端（前端自主控制灯光）"""
         try:
             data_list = []
             for frame in frames:
@@ -225,10 +229,13 @@ class ClientSession:
                         row_list.append([row])
                 data_list.append(row_list)
             
+            # 注：前端自主控制灯光，后端不再发送 light_states
             message = json.dumps({
                 "type": "data",
                 "data": data_list,
                 "is_first": is_first,
+                "current_step": self.service.current_step if self.service else 0,
+                "current_timestamp": self.service.current_timestamp if self.service else "",
             })
             
             await self.websocket.send_text(message)
@@ -350,13 +357,35 @@ class ClientSession:
                 self._protocol_logger.log_ldpc_after_sample(first_ldpc_bytes)
             
             if self._constellation:
-                results = self._constellation.apply_light_control(commands)
+                # 1. 根据命令计算目标灯光状态
+                target_states = {}
+                for cmd in commands:
+                    sat_id = cmd.get("sat_id")
+                    command = cmd.get("command", "").lower()
+                    if command == "on":
+                        target_states[sat_id] = True
+                    elif command == "off":
+                        target_states[sat_id] = False
                 
-                # 同步灯光状态到数据库
+                # 2. 先更新数据库（DB 是数据源）
+                if target_states and self._session_factory:
+                    try:
+                        from ..db.repositories.satellite_repo import SatelliteRepository
+                        async with self._session_factory() as session:
+                            repo = SatelliteRepository(session)
+                            await repo.bulk_update_light_states(target_states)
+                            print(f"[Client {self.client_id}] 灯光状态已写入数据库: {target_states}")
+                    except Exception as e:
+                        print(f"[Client {self.client_id}] 灯光状态写入数据库失败: {e}")
+                
+                # 3. 星座从数据库读取最新状态（内存与 DB 同步）
                 try:
-                    await self._sync_light_state_to_db(self._constellation)
+                    await self._reload_light_state_from_db(self._constellation)
                 except Exception as e:
-                    print(f"[Client {self.client_id}] 灯光状态同步到数据库失败: {e}")
+                    print(f"[Client {self.client_id}] 星座从数据库读取灯光状态失败: {e}")
+                
+                # 4. 应用灯光控制到内存星座（此时内存已与 DB 一致，主要用于日志和返回结果）
+                results = self._constellation.apply_light_control(commands)
                 
                 # 同步邻居关系到数据库
                 if neighbor_map:
@@ -462,8 +491,8 @@ class ClientSession:
         except Exception as e:
             print(f"[Client {self.client_id}] 发送响应失败: {e}")
     
-    async def _sync_light_state_to_db(self, constellation) -> None:
-        """同步星座灯光状态到数据库"""
+    async def _reload_light_state_from_db(self, constellation) -> None:
+        """让星座从数据库重新加载所有卫星的灯光状态"""
         if self._session_factory is None:
             return
         
@@ -471,9 +500,13 @@ class ClientSession:
         
         async with self._session_factory() as session:
             repo = SatelliteRepository(session)
-            for sat in constellation.satellites:
-                await repo.update_light_state(sat.sat_id, sat.light_state)
-            await session.commit()
+            all_sats = await repo.get_all()
+            db_light_states = {sat.sat_id: sat.light_state for sat in all_sats}
+        
+        # 更新内存中星座的灯光状态
+        for sat in constellation.satellites:
+            if sat.sat_id in db_light_states:
+                sat.light_state = db_light_states[sat.sat_id]
     
     async def _sync_neighbors_to_db(self, neighbor_map: dict) -> None:
         """同步邻居关系到数据库"""

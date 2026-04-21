@@ -5,8 +5,7 @@
 """
 
 from __future__ import annotations
-import time
-from typing import Optional, List, Callable
+from typing import Optional, List
 
 from ..core.constellation import Constellation
 from ..core.frame_data import FrameData
@@ -39,6 +38,7 @@ class PropagationService:
         propagator: OrbitPropagator,
         buffer: Optional[RingBuffer] = None,
         buffer_capacity: int = 3600,
+        light_scheduler: Optional[Any] = None,
     ):
         """
         创建递推服务。
@@ -48,12 +48,14 @@ class PropagationService:
             propagator: 轨道推进器
             buffer: 自定义缓冲区（可选）
             buffer_capacity: 缓冲区容量（默认 3600 秒）
+            light_scheduler: 灯光调度器（可选）
         """
         self._constellation = constellation
         self._propagator = propagator
         self._buffer = buffer or RingBuffer(capacity=buffer_capacity)
         self._current_step = 0
         self._state = PropagationState.READY
+        self._light_scheduler = light_scheduler
     
     @property
     def constellation(self) -> Constellation:
@@ -69,6 +71,11 @@ class PropagationService:
     def current_step(self) -> int:
         """当前递推步数"""
         return self._current_step
+    
+    @property
+    def current_timestamp(self) -> str:
+        """当前仿真时间戳"""
+        return self._seconds_to_timestamp(self._current_step)
     
     @property
     def state(self) -> PropagationState:
@@ -111,6 +118,9 @@ class PropagationService:
         """
         递推一步。
         
+        注：灯光计划由前端播放循环自主执行，后端只负责生成轨道数据，
+        不修改内存星座的 light_state。
+        
         Args:
             dt: 时间步长 (秒)，默认 1 秒
         
@@ -131,7 +141,7 @@ class PropagationService:
         # 生成时间戳
         timestamp = self._seconds_to_timestamp(self._current_step + 1)
         
-        # 生成帧数据
+        # 生成帧数据（light_state 保持默认值，由前端控制）
         frame = self._constellation.get_snapshot(timestamp)
         frame.seconds = self._current_step + 1
         
@@ -140,6 +150,25 @@ class PropagationService:
         self._current_step += 1
         
         return True
+    
+    async def async_compute_step(self, dt: float = 1.0) -> bool:
+        """
+        递推一步（异步版本）。
+        
+        注：前端自主控制灯光，后端只负责轨道递推和计划状态记录。
+        
+        Args:
+            dt: 时间步长 (秒)，默认 1 秒
+        
+        Returns:
+            是否成功递推（缓冲区满时返回 False）
+        """
+        result = self.compute_step(dt)
+        
+        # 前端自主控制灯光，后端不再执行计划
+        # 保留 _light_scheduler 用于 API 查询计划状态
+        
+        return result
     
     def get_and_pop(self, n_seconds: int) -> List[FrameData]:
         """
@@ -185,6 +214,8 @@ class PropagationService:
     
     def stop(self) -> None:
         """停止递推"""
+        if self._state in (PropagationState.STOPPED, PropagationState.IDLE):
+            return
         self._transition_to(PropagationState.STOPPED)
     
     def reset(self) -> None:
@@ -209,10 +240,15 @@ class PropagationService:
         
         self._current_step = 0
         self._buffer.clear()
+        
+        # 重置灯光调度器
+        if self._light_scheduler:
+            self._light_scheduler.reset()
     
-    def _seconds_to_timestamp(self, total_seconds: int) -> str:
+    @staticmethod
+    def _seconds_to_timestamp_static(total_seconds: int) -> str:
         """
-        将秒偏移转换为时间戳字符串。
+        将秒偏移转换为时间戳字符串（静态版本，无需实例）。
         
         Args:
             total_seconds: 从起始时间经过的秒数
@@ -244,6 +280,10 @@ class PropagationService:
                 year += 1
         
         return f"{year}{month:02d}{day:02d}{hour:02d}{minute:02d}{second:02d}"
+    
+    def _seconds_to_timestamp(self, total_seconds: int) -> str:
+        """实例方法委托给静态方法"""
+        return self._seconds_to_timestamp_static(total_seconds)
     
     def __repr__(self) -> str:
         return (

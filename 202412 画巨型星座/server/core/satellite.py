@@ -92,5 +92,9 @@ class Satellite:
         self.light_state = not self.light_state
         return self.light_state
     
+    def set_light(self, state: bool) -> None:
+        """设置灯光状态"""
+        self.light_state = state
+    
     def __repr__(self) -> str:
         return f"Satellite(id={self.sat_id}, {self.orbit_elements})"
