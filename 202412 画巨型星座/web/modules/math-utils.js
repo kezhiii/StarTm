@@ -201,6 +201,16 @@ export function computeHillToGroundRotation(chief, observerLat, observerLon, gms
     const sSEZ = projectToSEZ(sEcef, observerLat, observerLon);
     const wSEZ = projectToSEZ(wEcef, observerLat, observerLon);
 
+    // 边缘情况：编队接近天顶（仰角 > 85°）
+    // 此时方位角定义不稳定，水平投影消失时无法确定旋转角
+    const sHoriz = Math.sqrt(sSEZ.south ** 2 + sSEZ.east ** 2);
+    const wHoriz = Math.sqrt(wSEZ.south ** 2 + wSEZ.east ** 2);
+
+    if (sHoriz < 0.01 && wHoriz < 0.01) {
+        console.warn('[ROTATION] 编队接近天顶，跳过地面视角补偿');
+        return 0;
+    }
+
     // 4. 计算沿轨方向在 az/el 平面上的投影角
     const phiS = Math.atan2(sSEZ.east, -sSEZ.south);
 
@@ -208,5 +218,5 @@ export function computeHillToGroundRotation(chief, observerLat, observerLon, gms
     const phiComp = -phiS;
 
     // 转换为角度（rotatePoints 使用角度制）
-    return phiComp * 180 / Math.PI;
+    return phiComp / DEG;
 }

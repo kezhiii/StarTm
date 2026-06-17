@@ -670,6 +670,13 @@ export function createConstellationPanel(appState) {
                         const { currentLat, currentLon } = appState.interaction;
                         groundAngle = computeHillToGroundRotation(chiefState, currentLat, currentLon, gmst);
                         console.log(`[PATTERN] 地面视角补偿角: ${groundAngle.toFixed(2)}° (观察者: ${currentLat.toFixed(1)}°, ${currentLon.toFixed(1)}°)`);
+                        
+                        // 检查编队是否在观察者视野中
+                        const chiefEcef = eciToEcef(chiefState.X, chiefState.Y, chiefState.Z, gmst);
+                        const chiefLocal = ecefToLocal(chiefEcef.x, chiefEcef.y, chiefEcef.z, currentLat, currentLon);
+                        if (chiefLocal.el < 0) {
+                            console.warn(`[PATTERN] 编队在地平线以下 (仰角=${chiefLocal.el.toFixed(1)}°)，匹配仅用于参考`);
+                        }
                     }
                 } catch (e) {
                     console.warn('[PATTERN] 计算地面补偿角失败，跳过旋转:', e.message);
