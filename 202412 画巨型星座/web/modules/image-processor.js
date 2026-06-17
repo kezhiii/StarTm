@@ -1079,7 +1079,7 @@ export function decideLighting(matches, satCount, radiusThreshold) {
  * @param {number} satCount - 卫星总数
  * @returns {Promise<{lightMap: Map, previewData: ImageData, shapePoints: Array, transform: Object}>}
  */
-export async function processImage(file, satPositions, satCount) {
+export async function processImage(file, satPositions, satCount, options = {}) {
     console.log(`[PROCESS] 开始处理图像...`);
     
     // 模块一：提取目标形状点集
@@ -1097,8 +1097,17 @@ export async function processImage(file, satPositions, satCount) {
         };
     }
     
+    // 地面视角补偿：预旋转形状点
+    // groundRotationAngle 为度（与 rotatePoints 一致）
+    let matchShapePoints = shapePoints;
+    const groundRotationAngle = options.groundRotationAngle;
+    if (groundRotationAngle !== undefined && Math.abs(groundRotationAngle) > 0.01) {
+        matchShapePoints = rotatePoints(shapePoints, groundRotationAngle);
+        console.log(`[PROCESS] 地面视角补偿旋转: ${groundRotationAngle.toFixed(2)}°`);
+    }
+    
     // 模块二 & 三：搜索最优变换（含平移搜索）
-    const transform = findBestTransform(shapePoints, satPositions);
+    const transform = findBestTransform(matchShapePoints, satPositions);
     
     // 计算变换后的形状点（旋转+缩放，不含平移）
     const transformedShapePoints = transform.transformedPoints || 
