@@ -1097,21 +1097,24 @@ export async function processImage(file, satPositions, satCount, options = {}) {
         };
     }
     
-    // 地面视角补偿：预旋转形状点
-    // groundRotationAngle 为度（与 rotatePoints 一致）
-    let matchShapePoints = shapePoints;
+    // 模块二 & 三：搜索最优变换（使用原始形状点，不预旋转）
+    // 注意：不能对形状点做预旋转，因为 findBestTransform 会搜索所有角度，
+    // 预旋转会被匹配的自动角度搜索抵消，导致无效。
+    const transform = findBestTransform(shapePoints, satPositions);
+    
+    // 地面视角补偿：在匹配之后调整最终显示角度
+    // 原理：findBestTransform 找到在 Hill 帧中最优的旋转角 bestAngle
+    // 但地面观察者看到的 Hill 帧是旋转了 φ_comp 的
+    // 所以需要将最终角度减去 φ_comp 来补偿地面视角的旋转
     const groundRotationAngle = options.groundRotationAngle;
+    let displayAngle = transform.bestAngle;
     if (groundRotationAngle !== undefined && Math.abs(groundRotationAngle) > 0.01) {
-        matchShapePoints = rotatePoints(shapePoints, groundRotationAngle);
-        console.log(`[PROCESS] 地面视角补偿旋转: ${groundRotationAngle.toFixed(2)}°`);
+        displayAngle = transform.bestAngle - groundRotationAngle;
+        console.log(`[PROCESS] 地面视角补偿: bestAngle=${transform.bestAngle.toFixed(2)}° - ${groundRotationAngle.toFixed(2)}° = ${displayAngle.toFixed(2)}°`);
     }
     
-    // 模块二 & 三：搜索最优变换（含平移搜索）
-    const transform = findBestTransform(matchShapePoints, satPositions);
-    
-    // 计算变换后的形状点（旋转+缩放，不含平移）
-    const transformedShapePoints = transform.transformedPoints || 
-        scalePoints(rotatePoints(shapePoints, transform.bestAngle), transform.bestScale);
+    // 计算变换后的形状点（使用补偿后的显示角度 + 缩放，不含平移）
+    const transformedShapePoints = scalePoints(rotatePoints(shapePoints, displayAngle), transform.bestScale);
     
     // 将卫星平移到与形状点相同的坐标系
     const alignedSatPositions = satPositions.map(s => ({
