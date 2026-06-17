@@ -1,6 +1,6 @@
 // ======================== 卫星编队可视化面板 ========================
 import * as THREE from 'three';
-import { parseTimestamp, dateToJD, calcGMST, eciToEcef, ecefToLocal, eciToHill } from '../math-utils.js';
+import { parseTimestamp, dateToJD, calcGMST, eciToEcef, ecefToLocal, eciToHill, computeHillToGroundRotation } from '../math-utils.js';
 import { DEG, RE_KM, RE_3D } from '../config.js';
 import { createProtocolConfirmBar } from './protocol-confirm-bar.js';
 import { createLightTimeline } from '../light-timeline.js';
@@ -643,9 +643,41 @@ export function createConstellationPanel(appState) {
                 // 获取卫星数量
                 const satCount = appState.config?.satCount || satPositions.length || 100;
                 
-                // 处理图像（新API：传入卫星位置，返回点亮决策）
+                // 计算地面视角补偿旋转角
+                let groundAngle = 0;
+                try {
+                    const currentMode = appState.currentMode;
+                    let chiefState = null;
+                    let gmst = 0;
+                    
+                    if (currentMode === 'csv' && appState.csv.satelliteData) {
+                        const idx = appState.csv.state.currentTimeIdx;
+                        if (appState.csv.satelliteData[idx]) {
+                            const s = appState.csv.satelliteData[idx].sats[0]; // 主星 (第一颗)
+                            chiefState = { X: s.X, Y: s.Y, Z: s.Z, Vx: s.Vx, Vy: s.Vy, Vz: s.Vz };
+                            const ts = appState.csv.satelliteData[idx].timestamp;
+                            const d = parseTimestamp(ts);
+                            gmst = calcGMST(dateToJD(d.year, d.month, d.day, d.hour, d.minute, d.second));
+                        }
+                    } else if (currentMode === 'ws' && appState.ws.lastStepData) {
+                        const d0 = appState.ws.lastStepData[0];
+                        chiefState = { X: d0[8], Y: d0[9], Z: d0[10], Vx: d0[11], Vy: d0[12], Vz: d0[13] };
+                        const d = parseTimestamp(d0[0]);
+                        gmst = calcGMST(dateToJD(d.year, d.month, d.day, d.hour, d.minute, d.second));
+                    }
+                    
+                    if (chiefState) {
+                        const { currentLat, currentLon } = appState.interaction;
+                        groundAngle = computeHillToGroundRotation(chiefState, currentLat, currentLon, gmst);
+                        console.log(`[PATTERN] 地面视角补偿角: ${groundAngle.toFixed(2)}° (观察者: ${currentLat.toFixed(1)}°, ${currentLon.toFixed(1)}°)`);
+                    }
+                } catch (e) {
+                    console.warn('[PATTERN] 计算地面补偿角失败，跳过旋转:', e.message);
+                }
+                
+                // 处理图像（传入地面旋转补偿角）
                 const { lightMap, previewData, shapePoints, transform, width, height } = 
-                    await processImage(file, satPositions, satCount);
+                    await processImage(file, satPositions, satCount, { groundRotationAngle: groundAngle });
                 
                 console.log(`[PATTERN] 图像处理完成: ${width}x${height}`);
                 console.log(`[PATTERN] 形状点: ${shapePoints.length}, 变换: angle=${transform?.bestAngle?.toFixed(1)}°, scale=${transform?.bestScale?.toFixed(3)}, tx=${transform?.bestTx?.toFixed(2)}, ty=${transform?.bestTy?.toFixed(2)}`);
