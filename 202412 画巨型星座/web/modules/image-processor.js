@@ -827,7 +827,7 @@ function hungarianMatch(shapePoints, satPositions) {
  * @param {Array} satPositions - 卫星位置 [{x, y}, ...]
  * @returns {{bestAngle: number, bestScale: number, bestTx: number, bestTy: number, bestCost: number, bestMatches: Array}}
  */
-export function findBestTransform(shapePoints, satPositions) {
+export function findBestTransform(shapePoints, satPositions, options = {}) {
     // 计算卫星质心
     let cx = 0, cy = 0;
     for (const sat of satPositions) {
@@ -863,23 +863,76 @@ export function findBestTransform(shapePoints, satPositions) {
     const stepX = (maxTranslate * 2) / gridSize;
     const stepY = (maxTranslate * 2) / gridSize;
     
-    // 粗搜索使用全部形状点（贪心匹配速度快，可以承受）
-    const coarseShapePoints = shapePoints;
-    
-    console.log(`[MATCH] 卫星分布半径: ${maxDist.toFixed(2)}, 形状半径: ${shapeMaxDist.toFixed(2)}`);
-    console.log(`[MATCH] 缩放范围: [${minScale.toFixed(2)}, ${maxScale.toFixed(2)}]`);
-    console.log(`[TRANS] 粗搜索: ${gridSize}×${gridSize} 平移 × ${Math.ceil(360/10)} 角度 × 6 缩放 = ${gridSize*gridSize*Math.ceil(360/10)*6} 组合`);
-    
+    const fixedAngle = options.fixedAngle;
+    const angleStep = 10;   // 粗搜索用 10 度步长
+    const scaleSteps = 5;
+    const scaleStep = (maxScale - minScale) / scaleSteps;
+
     let bestCost = Infinity;
     let bestAngle = 0;
     let bestScale = 1;
     let bestTx = 0;
     let bestTy = 0;
-    
-    // ========== 第一阶段：粗搜索（贪心算法，快速筛选） ==========
-    const angleStep = 10;  // 粗搜索用 10 度步长
-    const scaleSteps = 5;
-    const scaleStep = (maxScale - minScale) / scaleSteps;
+
+    if (fixedAngle !== undefined) {
+        // ========== 地面视角补偿模式：固定角度，只搜索缩放+平移 ==========
+        console.log(`[MATCH] 地面视角模式: 固定角度=${fixedAngle.toFixed(1)}°, 搜索缩放+平移`);
+        console.log(`[MATCH] 缩放范围: [${minScale.toFixed(2)}, ${maxScale.toFixed(2)}]`);
+
+        const fineShapePoints = shapePoints.slice(0, Math.min(shapePoints.length, satPositions.length));
+        const fixedRotated = rotatePoints(fineShapePoints, fixedAngle);
+
+        // 粗搜索：平移网格 × 缩放
+        for (let gi = 0; gi < gridSize; gi++) {
+            for (let gj = 0; gj < gridSize; gj++) {
+                let tx = cx - maxDist + (gi + 0.5) * stepX;
+                let ty = cy - maxDist + (gj + 0.5) * stepY;
+                tx = Math.max(cx - maxTranslate, Math.min(cx + maxTranslate, tx));
+                ty = Math.max(cx - maxTranslate, Math.min(cx + maxTranslate, ty));
+
+                const shiftedSat = satPositions.map(s => ({ x: s.x - tx, y: s.y - ty }));
+
+                for (let si = 0; si <= scaleSteps; si++) {
+                    const scale = minScale + si * scaleStep;
+                    if (scale <= 0) continue;
+                    const scaled = scalePoints(fixedRotated, scale);
+                    const { totalCost } = hungarianMatch(scaled, shiftedSat);
+                    if (totalCost < bestCost) {
+                        bestCost = totalCost;
+                        bestAngle = fixedAngle;
+                        bestScale = scale;
+                        bestTx = tx;
+                        bestTy = ty;
+                    }
+                }
+            }
+        }
+
+        // 精细搜索：缩放假射 ±scaleStep, 步长 scaleStep/5
+        const fineScaleStep = scaleStep / 5;
+        for (let si = -5; si <= 5; si++) {
+            const fineScale = bestScale + si * fineScaleStep;
+            if (fineScale <= 0) continue;
+            const scaled = scalePoints(fixedRotated, fineScale);
+            const shiftedSat = satPositions.map(s => ({ x: s.x - bestTx, y: s.y - bestTy }));
+            const { totalCost } = hungarianMatch(scaled, shiftedSat);
+            if (totalCost < bestCost) {
+                bestCost = totalCost;
+                bestScale = fineScale;
+            }
+        }
+
+        console.log(`[MATCH] 地面视角匹配完成: 最优成本=${bestCost.toFixed(2)}, scale=${bestScale.toFixed(3)}`);
+    } else {
+        // ========== 标准模式：搜索角度+缩放+平移 ==========
+        // 粗搜索使用全部形状点（贪心算法速度快，可以承受）
+        const coarseShapePoints = shapePoints;
+
+        console.log(`[MATCH] 卫星分布半径: ${maxDist.toFixed(2)}, 形状半径: ${shapeMaxDist.toFixed(2)}`);
+        console.log(`[MATCH] 缩放范围: [${minScale.toFixed(2)}, ${maxScale.toFixed(2)}]`);
+        console.log(`[TRANS] 粗搜索: ${gridSize}×${gridSize} 平移 × ${Math.ceil(360/10)} 角度 × 6 缩放 = ${gridSize*gridSize*Math.ceil(360/10)*6} 组合`);
+
+        // ========== 第一阶段：粗搜索（贪心算法，快速筛选） ==========
     
     // 收集候选解
     const candidates = [];
@@ -973,7 +1026,8 @@ export function findBestTransform(shapePoints, satPositions) {
     }
     
     console.log(`[MATCH] 精细搜索完成: 最优成本: ${bestCost.toFixed(2)}`);
-    
+    } // end else (标准模式)
+
     // 获取最佳匹配结果（应用平移）
     const bestRotated = rotatePoints(shapePoints, bestAngle);
     const bestScaled = scalePoints(bestRotated, bestScale);
@@ -1097,24 +1151,21 @@ export async function processImage(file, satPositions, satCount, options = {}) {
         };
     }
     
-    // 模块二 & 三：搜索最优变换（使用原始形状点，不预旋转）
-    // 注意：不能对形状点做预旋转，因为 findBestTransform 会搜索所有角度，
-    // 预旋转会被匹配的自动角度搜索抵消，导致无效。
-    const transform = findBestTransform(shapePoints, satPositions);
-    
-    // 地面视角补偿：在匹配之后调整最终显示角度
-    // 原理：findBestTransform 找到在 Hill 帧中最优的旋转角 bestAngle
-    // 但地面观察者看到的 Hill 帧是旋转了 φ_comp 的
-    // 所以需要将最终角度减去 φ_comp 来补偿地面视角的旋转
+    // 模块二 & 三：搜索最优变换
+    // 地面视角补偿：当提供了 groundRotationAngle 时，固定旋转角为 -groundRotationAngle
+    // 这样匹配器只搜索缩放和平移，确保被选卫星的组合在地面视角下呈现正确朝向
+    // 原理：Hill 帧 S-W 平面在地面观察者 az/el 平面上旋转了 φ_S = groundRotationAngle
+    //       固定角 = -φ_S 使得图案在地面视角中正向显示
     const groundRotationAngle = options.groundRotationAngle;
-    let displayAngle = transform.bestAngle;
+    const matchOptions = {};
     if (groundRotationAngle !== undefined && Math.abs(groundRotationAngle) > 0.01) {
-        displayAngle = transform.bestAngle - groundRotationAngle;
-        console.log(`[PROCESS] 地面视角补偿: bestAngle=${transform.bestAngle.toFixed(2)}° - ${groundRotationAngle.toFixed(2)}° = ${displayAngle.toFixed(2)}°`);
+        matchOptions.fixedAngle = -groundRotationAngle;
+        console.log(`[PROCESS] 地面视角补偿: 固定匹配角 = ${(-groundRotationAngle).toFixed(2)}° (补偿角=${groundRotationAngle.toFixed(2)}°)`);
     }
-    
-    // 计算变换后的形状点（使用补偿后的显示角度 + 缩放，不含平移）
-    const transformedShapePoints = scalePoints(rotatePoints(shapePoints, displayAngle), transform.bestScale);
+    const transform = findBestTransform(shapePoints, satPositions, matchOptions);
+
+    // 使用匹配得到的 bestAngle 计算变换后的形状点
+    const transformedShapePoints = scalePoints(rotatePoints(shapePoints, transform.bestAngle), transform.bestScale);
     
     // 将卫星平移到与形状点相同的坐标系
     const alignedSatPositions = satPositions.map(s => ({
