@@ -1152,20 +1152,25 @@ export async function processImage(file, satPositions, satCount, options = {}) {
     }
     
     // 模块二 & 三：搜索最优变换
-    // 地面视角补偿：当提供了 groundRotationAngle 时，固定旋转角为 -groundRotationAngle
-    // 这样匹配器只搜索缩放和平移，确保被选卫星的组合在地面视角下呈现正确朝向
-    // 原理：Hill 帧 S-W 平面在地面观察者 az/el 平面上旋转了 φ_S = groundRotationAngle
-    //       固定角 = -φ_S 使得图案在地面视角中正向显示
+    // 地面视角补偿原理：
+    // 1. Hill 面板 (S, -W) 是左手坐标系，地面观察者 (方位角, 仰角) 是右手坐标系
+    //    → 从 Hill 面板到地面视角存在固有的左右镜像翻转
+    // 2. Hill 帧 S 轴在地面 az/el 平面上的投影角为 φ_S = groundRotationAngle
+    //    → 需要固定旋转角为 -φ_S 来校正旋转
+    // 3. 镜像修复：水平翻转形状点以补偿手性差异
     const groundRotationAngle = options.groundRotationAngle;
     const matchOptions = {};
+    let effectiveShapePoints = shapePoints;
     if (groundRotationAngle !== undefined && Math.abs(groundRotationAngle) > 0.01) {
         matchOptions.fixedAngle = -groundRotationAngle;
-        console.log(`[PROCESS] 地面视角补偿: 固定匹配角 = ${(-groundRotationAngle).toFixed(2)}° (补偿角=${groundRotationAngle.toFixed(2)}°)`);
+        // 水平镜像：取反 x 坐标，补偿手性翻转
+        effectiveShapePoints = shapePoints.map(p => ({ x: -p.x, y: p.y }));
+        console.log(`[PROCESS] 地面视角补偿: 固定匹配角=${(-groundRotationAngle).toFixed(2)}° + 水平镜像 (补偿角=${groundRotationAngle.toFixed(2)}°)`);
     }
-    const transform = findBestTransform(shapePoints, satPositions, matchOptions);
+    const transform = findBestTransform(effectiveShapePoints, satPositions, matchOptions);
 
     // 使用匹配得到的 bestAngle 计算变换后的形状点
-    const transformedShapePoints = scalePoints(rotatePoints(shapePoints, transform.bestAngle), transform.bestScale);
+    const transformedShapePoints = scalePoints(rotatePoints(effectiveShapePoints, transform.bestAngle), transform.bestScale);
     
     // 将卫星平移到与形状点相同的坐标系
     const alignedSatPositions = satPositions.map(s => ({
