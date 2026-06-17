@@ -652,15 +652,18 @@ export function createConstellationPanel(appState) {
                     
                     if (currentMode === 'csv' && appState.csv.satelliteData) {
                         const idx = appState.csv.state.currentTimeIdx;
+                        console.log(`[PATTERN] CSV模式: 时间索引=${idx}, 总帧数=${appState.csv.satelliteData.length}`);
                         if (appState.csv.satelliteData[idx]) {
                             const s = appState.csv.satelliteData[idx].sats[0]; // 主星 (第一颗)
                             chiefState = { X: s.X, Y: s.Y, Z: s.Z, Vx: s.Vx, Vy: s.Vy, Vz: s.Vz };
                             const ts = appState.csv.satelliteData[idx].timestamp;
+                            console.log(`[PATTERN] 当前时间戳: ${ts}`);
                             const d = parseTimestamp(ts);
                             gmst = calcGMST(dateToJD(d.year, d.month, d.day, d.hour, d.minute, d.second));
                         }
                     } else if (currentMode === 'ws' && appState.ws.lastStepData) {
                         const d0 = appState.ws.lastStepData[0];
+                        console.log(`[PATTERN] WS模式: 时间戳=${d0[0]}`);
                         chiefState = { X: d0[8], Y: d0[9], Z: d0[10], Vx: d0[11], Vy: d0[12], Vz: d0[13] };
                         const d = parseTimestamp(d0[0]);
                         gmst = calcGMST(dateToJD(d.year, d.month, d.day, d.hour, d.minute, d.second));
@@ -670,6 +673,7 @@ export function createConstellationPanel(appState) {
                         const { currentLat, currentLon } = appState.interaction;
                         groundAngle = computeHillToGroundRotation(chiefState, currentLat, currentLon, gmst);
                         console.log(`[PATTERN] 地面视角补偿角: ${groundAngle.toFixed(2)}° (观察者: ${currentLat.toFixed(1)}°, ${currentLon.toFixed(1)}°)`);
+                        console.log(`[PATTERN] 主星ECI: X=${chiefState.X.toFixed(1)}, Y=${chiefState.Y.toFixed(1)}, Z=${chiefState.Z.toFixed(1)} | GMST=${(gmst/DEG).toFixed(2)}°`);
                         
                         // 检查编队是否在观察者视野中
                         const chiefEcef = eciToEcef(chiefState.X, chiefState.Y, chiefState.Z, gmst);

@@ -875,54 +875,71 @@ export function findBestTransform(shapePoints, satPositions, options = {}) {
     let bestTy = 0;
 
     if (fixedAngle !== undefined) {
-        // ========== 地面视角补偿模式：固定角度，只搜索缩放+平移 ==========
-        console.log(`[MATCH] 地面视角模式: 固定角度=${fixedAngle.toFixed(1)}°, 搜索缩放+平移`);
+        // ========== 地面视角补偿模式：在补偿角附近搜索最优角度+缩放+平移 ==========
+        // 原理：fixedAngle 是理论上的地面补偿角 (-φ_S)
+        // 但编队在旋转，不同角度下的匹配质量差异大
+        // 在 ±angleRange 内搜索，兼顾地面朝向和匹配质量
+        const angleRange = 15;       // 补偿角附近 ±15° 搜索
+        const angleSearchStep = 5;   // 角度搜索步长 5°
+
+        console.log(`[MATCH] 地面视角模式: 中心角=${fixedAngle.toFixed(1)}° ±${angleRange}°, 步长=${angleSearchStep}°`);
         console.log(`[MATCH] 缩放范围: [${minScale.toFixed(2)}, ${maxScale.toFixed(2)}]`);
 
         const fineShapePoints = shapePoints.slice(0, Math.min(shapePoints.length, satPositions.length));
-        const fixedRotated = rotatePoints(fineShapePoints, fixedAngle);
 
-        // 粗搜索：平移网格 × 缩放
-        for (let gi = 0; gi < gridSize; gi++) {
-            for (let gj = 0; gj < gridSize; gj++) {
-                let tx = cx - maxDist + (gi + 0.5) * stepX;
-                let ty = cy - maxDist + (gj + 0.5) * stepY;
-                tx = Math.max(cx - maxTranslate, Math.min(cx + maxTranslate, tx));
-                ty = Math.max(cx - maxTranslate, Math.min(cx + maxTranslate, ty));
+        // 粗搜索：角度范围 × 平移网格 × 缩放
+        for (let da = -angleRange; da <= angleRange; da += angleSearchStep) {
+            const angle = fixedAngle + da;
+            const rotated = rotatePoints(fineShapePoints, angle);
 
-                const shiftedSat = satPositions.map(s => ({ x: s.x - tx, y: s.y - ty }));
+            for (let gi = 0; gi < gridSize; gi++) {
+                for (let gj = 0; gj < gridSize; gj++) {
+                    let tx = cx - maxDist + (gi + 0.5) * stepX;
+                    let ty = cy - maxDist + (gj + 0.5) * stepY;
+                    tx = Math.max(cx - maxTranslate, Math.min(cx + maxTranslate, tx));
+                    ty = Math.max(cx - maxTranslate, Math.min(cx + maxTranslate, ty));
 
-                for (let si = 0; si <= scaleSteps; si++) {
-                    const scale = minScale + si * scaleStep;
-                    if (scale <= 0) continue;
-                    const scaled = scalePoints(fixedRotated, scale);
-                    const { totalCost } = hungarianMatch(scaled, shiftedSat);
-                    if (totalCost < bestCost) {
-                        bestCost = totalCost;
-                        bestAngle = fixedAngle;
-                        bestScale = scale;
-                        bestTx = tx;
-                        bestTy = ty;
+                    const shiftedSat = satPositions.map(s => ({ x: s.x - tx, y: s.y - ty }));
+
+                    for (let si = 0; si <= scaleSteps; si++) {
+                        const scale = minScale + si * scaleStep;
+                        if (scale <= 0) continue;
+                        const scaled = scalePoints(rotated, scale);
+                        const { totalCost } = hungarianMatch(scaled, shiftedSat);
+                        if (totalCost < bestCost) {
+                            bestCost = totalCost;
+                            bestAngle = angle;
+                            bestScale = scale;
+                            bestTx = tx;
+                            bestTy = ty;
+                        }
                     }
                 }
             }
         }
 
-        // 精细搜索：缩放假射 ±scaleStep, 步长 scaleStep/5
+        // 精细搜索：角度 ±angleSearchStep, 步长 2°; 缩放 ±scaleStep
+        const fineAngleStep = 2;
         const fineScaleStep = scaleStep / 5;
-        for (let si = -5; si <= 5; si++) {
-            const fineScale = bestScale + si * fineScaleStep;
-            if (fineScale <= 0) continue;
-            const scaled = scalePoints(fixedRotated, fineScale);
-            const shiftedSat = satPositions.map(s => ({ x: s.x - bestTx, y: s.y - bestTy }));
-            const { totalCost } = hungarianMatch(scaled, shiftedSat);
-            if (totalCost < bestCost) {
-                bestCost = totalCost;
-                bestScale = fineScale;
+        for (let da = -angleSearchStep; da <= angleSearchStep; da += fineAngleStep) {
+            const fineAngle = bestAngle + da;
+            const fineRotated = rotatePoints(fineShapePoints, fineAngle);
+            for (let si = -5; si <= 5; si++) {
+                const fineScale = bestScale + si * fineScaleStep;
+                if (fineScale <= 0) continue;
+                const scaled = scalePoints(fineRotated, fineScale);
+                const shiftedSat = satPositions.map(s => ({ x: s.x - bestTx, y: s.y - bestTy }));
+                const { totalCost } = hungarianMatch(scaled, shiftedSat);
+                if (totalCost < bestCost) {
+                    bestCost = totalCost;
+                    bestAngle = fineAngle;
+                    bestScale = fineScale;
+                }
             }
         }
 
-        console.log(`[MATCH] 地面视角匹配完成: 最优成本=${bestCost.toFixed(2)}, scale=${bestScale.toFixed(3)}`);
+        const angleDeviation = bestAngle - fixedAngle;
+        console.log(`[MATCH] 地面视角匹配完成: angle=${bestAngle.toFixed(1)}° (偏差${angleDeviation >= 0 ? '+' : ''}${angleDeviation.toFixed(1)}°), cost=${bestCost.toFixed(2)}, scale=${bestScale.toFixed(3)}`);
     } else {
         // ========== 标准模式：搜索角度+缩放+平移 ==========
         // 粗搜索使用全部形状点（贪心算法速度快，可以承受）
