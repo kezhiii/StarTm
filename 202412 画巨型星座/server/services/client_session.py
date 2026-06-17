@@ -277,8 +277,9 @@ class ClientSession:
             raw_bytes = base64.b64decode(frame_data)
             
             if not hasattr(self, '_protocol_handler'):
-                light_service = LightControlService()
-                verify_service = VerifyService(num_satellites=light_service._num_satellites)
+                sat_count = self._constellation.sat_count if self._constellation else 101
+                light_service = LightControlService(num_satellites=sat_count)
+                verify_service = VerifyService(num_satellites=sat_count)
                 self._protocol_handler = ProtocolHandler(
                     light_service, verify_service=verify_service, logger=self._protocol_logger
                 )
@@ -319,8 +320,9 @@ class ClientSession:
                 self._protocol_logger.log_sent(raw_frame, commands, client_addr=self.client_id)
             
             if not hasattr(self, '_protocol_handler'):
-                light_service = LightControlService()
-                verify_service = VerifyService(num_satellites=light_service._num_satellites)
+                sat_count = self._constellation.sat_count if self._constellation else 101
+                light_service = LightControlService(num_satellites=sat_count)
+                verify_service = VerifyService(num_satellites=sat_count)
                 self._protocol_handler = ProtocolHandler(
                     light_service, verify_service=verify_service, logger=self._protocol_logger
                 )

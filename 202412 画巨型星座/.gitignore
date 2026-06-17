@@ -7,6 +7,7 @@ __pycache__/
 *.venv
 env/
 venv/
+.pytest_cache/
 
 # IDE
 .idea/
@@ -19,5 +20,50 @@ venv/
 .DS_Store
 Thumbs.db
 
-# 数据
+# 数据文件
 *.csv
+*.xlsx
+*.xls
+Input/fig/
+
+# 文档和专利文件
+docs/
+*.docx
+*.doc
+*.pdf
+*.pptx
+*.ppt
+
+# 图片和媒体文件
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.svg
+*.mp4
+*.mp3
+
+# 输出文件
+Output/
+log/
+*.log
+
+# Claude 配置
+.claude/
+opencode.json
+
+# 生成的文件
+*_media/
+*_centerOEmat.txt
+*_deputyOEmat.txt
+
+# 测试文件
+test-*.js
+test-*.html
+
+# 临时文件
+*.tmp
+*.bak
+*.swp
+*~

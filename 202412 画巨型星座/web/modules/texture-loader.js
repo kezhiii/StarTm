@@ -4,7 +4,7 @@ import * as THREE from 'three';
 // 纹理 URL 配置
 const TEXTURE_URLS = {
     earth: 'https://unpkg.com/three-globe@2.31.1/example/img/earth-blue-marble.jpg',
-    moon: 'https://upload.wikimedia.org/wikipedia/commons/thumb/e/e1/FullMoon2010.jpg/1200px-FullMoon2010.jpg'
+    moon: 'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/planets/moon_1024.jpg'
 };
 
 const DBG = {

@@ -130,7 +130,8 @@ export function initFirstPersonScene(scene, controls, camera, appState) {
     scene.add(sceneObjects.groundStationMarker1D);
 
     sceneObjects.satelliteMeshes1D = [];
-    for (let i = 0; i < 22; i++) {
+    const satCount = appState.config?.satCount || 0;
+    for (let i = 0; i < satCount; i++) {
         // 修复：克隆材质，使每颗卫星的颜色独立
         const mesh = new THREE.Mesh(SAT_GEOM_1ST, SAT_MAT_1ST.clone());
         mesh.userData.satIdx = i;

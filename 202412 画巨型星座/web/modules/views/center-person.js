@@ -81,7 +81,9 @@ export function initCenterPersonScene(scene, controls, appState) {
     scene.add(sceneObjects.centerSatMarker);
 
     sceneObjects.satelliteMeshesCenter = [];
-    for (let i = 0; i < 21; i++) {
+    const satCount = appState.config?.satCount || 0;
+    const deputyCount = satCount > 0 ? satCount - 1 : 0; // 从星数 = 总数 - 主星
+    for (let i = 0; i < deputyCount; i++) {
         // 修复：克隆材质，使每颗卫星的颜色独立
         const mesh = new THREE.Mesh(DEPUTY_SAT_GEOM, DEPUTY_SAT_MAT.clone());
         mesh.userData.satIdx = i + 1;

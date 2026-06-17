@@ -62,6 +62,43 @@ async def get_all_satellites(
     }
 
 
+@router.get("/neighbors/all")
+async def get_all_neighbor_map(
+    session: AsyncSession = Depends(get_session),
+):
+    """获取所有卫星的邻星关系映射"""
+    repo = NeighborRepository(session)
+    neighbor_map = await repo.get_all_neighbor_map()
+
+    return {
+        "neighbor_map": neighbor_map,
+        "total_relations": sum(len(v) for v in neighbor_map.values()),
+    }
+
+
+@router.get("/plane/{plane_index}")
+async def get_satellites_by_plane(
+    plane_index: int,
+    session: AsyncSession = Depends(get_session),
+):
+    """获取指定轨道面的所有卫星"""
+    repo = SatelliteRepository(session)
+    satellites = await repo.get_by_plane(plane_index)
+
+    return {
+        "plane_index": plane_index,
+        "count": len(satellites),
+        "satellites": [
+            {
+                "sat_id": s.sat_id,
+                "slot_index": s.slot_index,
+                "light_state": s.light_state,
+            }
+            for s in satellites
+        ],
+    }
+
+
 @router.get("/{sat_id}")
 async def get_satellite(
     sat_id: int,
@@ -101,29 +138,6 @@ async def get_satellite(
                 "calculated_at": n.calculated_at.isoformat() if n.calculated_at else None,
             }
             for n in neighbors
-        ],
-    }
-
-
-@router.get("/plane/{plane_index}")
-async def get_satellites_by_plane(
-    plane_index: int,
-    session: AsyncSession = Depends(get_session),
-):
-    """获取指定轨道面的所有卫星"""
-    repo = SatelliteRepository(session)
-    satellites = await repo.get_by_plane(plane_index)
-
-    return {
-        "plane_index": plane_index,
-        "count": len(satellites),
-        "satellites": [
-            {
-                "sat_id": s.sat_id,
-                "slot_index": s.slot_index,
-                "light_state": s.light_state,
-            }
-            for s in satellites
         ],
     }
 
@@ -169,18 +183,4 @@ async def get_satellite_neighbors(
             }
             for n in neighbors
         ],
-    }
-
-
-@router.get("/neighbors/all")
-async def get_all_neighbor_map(
-    session: AsyncSession = Depends(get_session),
-):
-    """获取所有卫星的邻星关系映射"""
-    repo = NeighborRepository(session)
-    neighbor_map = await repo.get_all_neighbor_map()
-
-    return {
-        "neighbor_map": neighbor_map,
-        "total_relations": sum(len(v) for v in neighbor_map.values()),
     }

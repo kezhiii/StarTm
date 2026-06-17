@@ -75,9 +75,10 @@ export function initThirdPersonScene(scene, controls, appState) {
     sceneObjects.groundStationMarker3D = new THREE.Mesh(GS_MARKER_GEOM, GS_MARKER_MAT);
     sceneObjects.earthGroup.add(sceneObjects.groundStationMarker3D);
 
-    // 卫星网格 (22 颗)
+    // 卫星网格 (从配置获取数量)
+    const satCount = appState.config?.satCount || 0;
     sceneObjects.satelliteMeshes3D = [];
-    for (let i = 0; i < 22; i++) {
+    for (let i = 0; i < satCount; i++) {
         // 修复：克隆材质，使每颗卫星的颜色独立
         const mesh = new THREE.Mesh(SAT_GEOM_3RD, SAT_MAT_3RD.clone());
         mesh.userData.satIdx = i;

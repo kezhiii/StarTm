@@ -114,5 +114,10 @@ export function createState() {
             startJD: null,
             speedFactor: 1,
         },
+
+        // 配置信息（从后端获取）
+        config: {
+            satCount: 0,  // 卫星总数，初始化时从后端获取
+        },
     };
 }

@@ -61,6 +61,42 @@ export function ecefToLocal(x, y, z, lat, lon) {
 }
 
 /**
+ * ECI 相对位置转 Hill 坐标 (RSW 帧)
+ * @param {Object} chief - 主星 {X, Y, Z, Vx, Vy, Vz}
+ * @param {Object} deputy - 从星 {X, Y, Z}
+ * @returns {Object} {radial, alongTrack, crossTrack} (km)
+ */
+export function eciToHill(chief, deputy) {
+    // 相对位置
+    const dx = deputy.X - chief.X;
+    const dy = deputy.Y - chief.Y;
+    const dz = deputy.Z - chief.Z;
+    
+    // R: 径向单位向量 (沿位置矢量)
+    const rChief = Math.sqrt(chief.X ** 2 + chief.Y ** 2 + chief.Z ** 2);
+    const rHat = { x: chief.X / rChief, y: chief.Y / rChief, z: chief.Z / rChief };
+    
+    // 速度矢量
+    const vChief = { x: chief.Vx, y: chief.Vy, z: chief.Vz };
+    
+    // W: 法向单位向量 (轨道面法向 = R × V)
+    const h = cross(rHat, vChief);
+    const hLen = Math.sqrt(h.x ** 2 + h.y ** 2 + h.z ** 2);
+    const wHat = { x: h.x / hLen, y: h.y / hLen, z: h.z / hLen };
+    
+    // S: 沿轨单位向量 (W × R)
+    const sHat = cross(wHat, rHat);
+    
+    // 投影到 Hill 帧
+    const rel = { x: dx, y: dy, z: dz };
+    return {
+        radial: dot(rel, rHat),
+        alongTrack: dot(rel, sHat),
+        crossTrack: dot(rel, wHat)
+    };
+}
+
+/**
  * 向量归一化
  */
 export function normalize(v) {

@@ -217,11 +217,14 @@ export function createLightTimeline(appState) {
         grid.innerHTML = '';
 
         // 从 appState 获取卫星数量
-        let satCount = 22; // 默认
-        if (appState.csv && appState.csv.satelliteData && appState.csv.satelliteData[0]) {
-            satCount = appState.csv.satelliteData[0].sats.length;
-        } else if (appState.ws && appState.ws.lastStepData) {
-            satCount = appState.ws.lastStepData.length;
+        let satCount = appState.config?.satCount || 0;
+        if (satCount === 0) {
+            // 备用方案：从实际数据获取
+            if (appState.csv && appState.csv.satelliteData && appState.csv.satelliteData[0]) {
+                satCount = appState.csv.satelliteData[0].sats.length;
+            } else if (appState.ws && appState.ws.lastStepData) {
+                satCount = appState.ws.lastStepData.length;
+            }
         }
 
         for (let i = 0; i < satCount; i++) {

@@ -70,8 +70,10 @@ async def _seed_constellation_to_db(constellation) -> None:
     """
     将星座数据同步到数据库。
     
-    如果数据库中已有卫星数据，则跳过（避免重复插入）。
-    否则将内存中的星座数据写入数据库。
+    自动检测配置文件与数据库的差异：
+    - 如果数据库为空，直接写入
+    - 如果卫星数量不一致，清空后重新写入
+    - 如果数量一致，跳过（避免重复插入）
     """
     try:
         session_factory = get_session_factory()
@@ -79,11 +81,24 @@ async def _seed_constellation_to_db(constellation) -> None:
             sat_repo = SatelliteRepository(session)
             neighbor_repo = NeighborRepository(session)
             
-            # 检查是否已有数据
+            # 获取内存中星座的卫星数量（含主星）
+            expected_count = constellation.sat_count
+            
+            # 获取数据库中的卫星数量
             existing_count = await sat_repo.count()
-            if existing_count > 0:
-                print(f"[Lifespan] 数据库已有 {existing_count} 颗卫星，跳过种子化")
+            
+            if existing_count == expected_count:
+                print(f"[Lifespan] 数据库已有 {existing_count} 颗卫星，与配置一致，跳过种子化")
                 return
+            
+            # 数量不一致，需要重新种子化
+            if existing_count > 0:
+                print(f"[Lifespan] 数据库有 {existing_count} 颗卫星，配置有 {expected_count} 颗，重新同步...")
+                # 清空旧数据
+                await neighbor_repo.delete_all()
+                await sat_repo.delete_all()
+                await session.commit()
+                print(f"[Lifespan] 已清空旧数据")
             
             # 种子化星座数据
             result = await constellation.save_to_db(sat_repo, neighbor_repo)

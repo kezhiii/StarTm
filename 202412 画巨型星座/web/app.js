@@ -340,6 +340,20 @@ async function init() {
         appState.textures.earthTextureLoaded = textures.earth;
         appState.textures.moonTextureLoaded = textures.moon;
 
+        // 1.5 获取卫星数量配置
+        try {
+            const resp = await fetch('/api/satellites?page_size=1');
+            if (resp.ok) {
+                const data = await resp.json();
+                appState.config.satCount = data.total || 0;
+                log.info(`从后端获取卫星数量: ${appState.config.satCount}`);
+            } else {
+                log.warn('无法获取卫星数量，使用默认值 0');
+            }
+        } catch (e) {
+            log.warn('获取卫星数量失败:', e);
+        }
+
         // 2. 初始化场景
         initBaseScene();
 

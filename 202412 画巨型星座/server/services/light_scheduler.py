@@ -2,13 +2,14 @@
 灯光调度服务
 
 提供灯光调度计划的数据库操作和状态查询。
-注：计划执行由前端播放循环自主控制，后端只负责数据持久化。
+后端负责：计划持久化、执行状态更新、内存星座同步。
+前端负责：基于播放帧时间戳的计划触发检查。
 """
 
 from __future__ import annotations
 from typing import Optional, Any, Dict, List
 from sqlalchemy.ext.asyncio import async_sessionmaker
-from sqlalchemy import update as sql_update
+from sqlalchemy import select, update as sql_update
 
 
 class LightScheduler:
@@ -17,7 +18,8 @@ class LightScheduler:
     
     职责：
     - 提供计划的数据库查询和状态更新
-    - 供 API 层调用，不直接控制前端灯光
+    - 执行到期计划（更新 DB + 内存星座状态）
+    - 供 API 层和 WebSocket 会话调用
     """
     
     def __init__(
@@ -104,7 +106,6 @@ class LightScheduler:
                         
                         # 更新 satellites 表
                         from datetime import datetime
-                        from sqlmodel import select
                         from ..db.models import Satellite
                         sat_result = await session.execute(
                             select(Satellite).where(Satellite.sat_id == schedule.sat_id)

@@ -14,7 +14,6 @@ const DBG = {
     error: (...a) => console.error('[PLAYBACK]', ...a)
 };
 
-const WS_PORT = 8000;
 const WS_MAX_QUEUE_SIZE = 3600;
 
 // CSV 播放循环状态（模块级，以便 changeSpeed 时保持状态）
@@ -665,7 +664,9 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
         function attemptConnection() {
             console.log(`[WS] 创建新 WebSocket 连接 (尝试 ${retryCount + 1}/${maxRetries})`);
             const clientId = 'web_' + Date.now() + '_' + Math.floor(Math.random() * 1000000);
-            wsState.connection = new WebSocket(`ws://127.0.0.1:${WS_PORT}/ws/${clientId}`);
+            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${wsProtocol}//${window.location.host}/ws/${clientId}`;
+            wsState.connection = new WebSocket(wsUrl);
 
             wsState.connection.onopen = () => {
                 console.log('[WS] 连接已打开');
@@ -763,7 +764,12 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
                     if (msg.is_first && appState.lightManager && msg.data.length > 0) {
                         const satCount = msg.data[0].length; // 每帧的卫星数
                         appState.lightManager.init(satCount);
+                        appState.config.satCount = satCount;  // 更新配置中的卫星数
                         DBG.log(`[LIGHT] WS 模式已初始化 ${satCount} 颗卫星的灯光状态`);
+                        
+                        // 更新总卫星数显示
+                        const totalSatCountEl = document.getElementById('totalSatCount');
+                        if (totalSatCountEl) totalSatCountEl.textContent = satCount;
                     }
 
                     // 同步灯光状态（在 init 之后）

@@ -38,8 +38,10 @@ class ConstellationConfig(BaseModel):
     start_year: int = Field(default=2021, ge=1900, le=2100)
     start_month: int = Field(default=8, ge=1, le=12)
     start_day: int = Field(default=17, ge=1, le=31)
-    center_oe_file: str = Field(default="Input/centerOEmat.txt")
-    deputy_oe_file: str = Field(default="Input/deputyOEmat.txt")
+    center_oe_file: str = Field(default="Input/200sats_centerOEmat.txt")
+    deputy_oe_file: str = Field(default="Input/200sats_deputyOEmat.txt")
+    # center_oe_file: str = Field(default="Input/centerOEmat.txt")
+    # deputy_oe_file: str = Field(default="Input/deputyOEmat.txt")
 
 
 class ConstellationParamsConfig(BaseModel):

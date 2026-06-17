@@ -148,7 +148,7 @@ export function createCsvManager(appState, lightManager, constellationPanel) {
             csvState.endIdx = appState.csv.timeIndices.length - 1;
 
             // 初始化灯光管理器
-            const satCount = appState.csv.satelliteData[0]?.sats?.length || 22;
+            const satCount = appState.csv.satelliteData[0]?.sats?.length || appState.config?.satCount || 0;
             if (lightManager) {
                 lightManager.init(satCount);
             }

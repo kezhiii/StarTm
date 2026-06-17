@@ -63,7 +63,7 @@ def create_app(
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
-        allow_credentials=True,
+        allow_credentials=False,  # 不能与 allow_origins=["*"] 同时使用 True
         allow_methods=["*"],
         allow_headers=["*"],
     )

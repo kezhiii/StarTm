@@ -35,7 +35,7 @@ def create_propagation_service() -> PropagationService:
     """
     try:
         # 加载配置
-        config = AppConfig.load()
+        config = AppConfig.load(os.path.join(DIR, 'config', 'default.yaml'))
         
         # 创建星座设置
         setup = ConstellationSetup(config)

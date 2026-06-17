@@ -48,7 +48,8 @@ server/
 │   │   ├── csv.py             # CSV 数据 API
 │   │   ├── config.py          # 配置 CRUD API
 │   │   ├── logs.py            # 协议日志 API
-│   │   └── constellation.py   # 卫星查询 + 灯光控制 API
+│   │   ├── constellation.py   # 卫星查询 + 灯光控制 API
+│   │   └── schedules.py       # 灯光调度计划 API（时间基灯光控制）
 │   └── ws/                    # WebSocket 路由
 │       ├── manager.py         # ConnectionManager（多客户端管理）
 │       └── router.py          # WebSocket 端点（/ws/{client_id}）
@@ -67,7 +68,8 @@ server/
     ├── protocol_logger.py     # 协议日志记录器（文件 + DB 双写）
     ├── verify_service.py      # 互校验服务
     ├── neighbor_finder.py     # 邻居发现服务
-    └── light_control.py       # 灯光控制服务
+    ├── light_control.py       # 灯光控制服务
+    └── light_scheduler.py     # 灯光调度计划服务（数据持久化 + 状态查询）
 ```
 
 ### 前端架构（JavaScript）
@@ -91,8 +93,12 @@ web/
 │   ├── ui/                    # UI 组件
 │   │   ├── location-controls.js
 │   │   ├── constellation-panel.js  # 星座面板（含待发送指令管理）
+│   │   ├── sat-light-controls.js   # 卫星灯光手动控制（含30秒覆盖机制）
 │   │   ├── protocol-confirm-bar.js
 │   │   └── stats-panel.js
+│   ├── light-schedule-manager.js   # 灯光计划管理器（前端自主执行引擎）
+│   ├── light-timeline.js           # 灯光时间线 UI（批量选择 + 持续时间）
+│   ├── light-manager.js            # 灯光状态管理器
 │   └── modes/                 # 数据模式
 │       └── ws-mode.js         # WebSocket 模式（端口 8000）
 └── style.css                   # 样式文件
@@ -132,6 +138,7 @@ python server_main.py   # 仅 WebSocket (8765)
 | `protocol_logs` | 协议日志 | timestamp, log_type, frame_data, messages |
 | `satellites` | 卫星数据 | sat_id, 轨道根数(a/e/i/Ω/ω/f), 物理属性, light_state |
 | `satellite_neighbors` | 邻星关系 | sat_id, neighbor_id, distance_km, calculated_at |
+| `light_schedules` | 灯光调度计划 | sat_id, schedule_type, trigger_time/trigger_at, command, duration_seconds, executed |
 | `alembic_version` | 迁移版本 | version_num |
 
 ### 数据流
@@ -142,7 +149,9 @@ python server_main.py   # 仅 WebSocket (8765)
   CSV 星座 → Constellation → DB 种子化（首次）
 
 运行时:
-  灯光控制 → 内存 light_state → DB update_light_state
+  灯光控制（手动）→ 前端 setLight → 3D 场景更新
+  灯光计划（自动）→ 前端播放循环 checkAndExecute → 3D 场景更新
+  计划持久化 → REST API → DB light_schedules
   邻居计算 → NeighborFinder → DB upsert_many（含距离）
 
 查询时:
@@ -178,9 +187,25 @@ URL: mysql+aiomysql://root:7777777zZ.@localhost:3306/sky dome
 
 ### 卫星编队灯光控制
 
+#### 即时手动控制
 1. 打开编队面板 → 选择卫星 → 确认发送
-2. 后端执行灯光控制 + 邻居计算 + DB 同步
-3. 前端自动更新 3D 场景灯光状态
+2. 前端直接更新 3D 场景灯光状态
+3. **手动控制自动设置 30 秒覆盖期**，期间该卫星的自动计划被跳过
+
+#### 时间基灯光调度（时间线）
+1. 打开灯光时间线面板 → 选择模式 → 批量选择卫星 → 设置时间 → 添加计划
+2. **三种时间模式**：
+   - **相对时间**：基于当前播放帧的时间戳，延迟 N 秒后触发
+   - **仿真绝对时间**：指定仿真时间戳（如 `20210817053301`）触发
+   - **真实时间（Wall-clock）**：基于系统时钟的 UTC 时间触发
+3. **持续时间支持**：开灯时可设置持续时长，系统自动创建对应的关灯计划
+4. **前端帧级精确执行**：计划在播放循环（`playback-manager.js` / `ws-mode.js`）中基于当前帧时间戳匹配，确保与可视化同步
+5. **手动覆盖优先级**：手动控制后 30 秒内，该卫星的自动调度计划被跳过
+
+#### 架构要点
+- **前端自主控制**：后端仅负责计划持久化（`light_schedules` 表），不修改 `light_state`
+- **轮询同步**：前端每 15 秒从 `/api/light-schedules` 轮询计划
+- **本地即时生效**：创建计划后立即添加到前端本地列表，无需等待轮询
 
 ---
 
@@ -300,8 +325,10 @@ Local (本地地平坐标系: 方位角/仰角/距离)
 | `server/services/client_session.py` | 客户端会话 | `ClientSession` (含 DB 同步) |
 | `server/propagators/perturbed.py` | 轨道递推引擎 | `PerturbedOrbitPropagator` (纯 numpy) |
 | `server/config/app_config.py` | 配置管理 | Pydantic BaseModel 配置类 |
-| `server/db/models.py` | 数据库表模型 | Config, ProtocolLog, Satellite, SatelliteNeighbor |
+| `server/db/models.py` | 数据库表模型 | Config, ProtocolLog, Satellite, SatelliteNeighbor, LightSchedule |
 | `server/core/constellation.py` | 星座实体 | `Constellation` (含 save_to_db, sync_light_state_to_db) |
+| `server/services/light_scheduler.py` | 灯光调度服务 | `LightScheduler` (数据持久化 + 状态查询) |
+| `server/fastapi_app/routes/schedules.py` | 灯光计划 API | 批量创建 / 查询 / 删除调度计划 |
 | `server/protocol/ldpc_codec.py` | LDPC 编解码 | `LDPCCodec` |
 | `server/protocol/transfer_frame.py` | 传输帧编解码 | `TransferFrame`, `SubMessage` |
 | `server/services/protocol_handler.py` | 协议处理器 | `ProtocolHandler` |
@@ -312,9 +339,13 @@ Local (本地地平坐标系: 方位角/仰角/距离)
 | 文件 | 作用 |
 |------|------|
 | `web/app.js` | 应用主入口 |
-| `web/managers/playback-manager.js` | 播放控制 + WebSocket 连接 |
+| `web/managers/playback-manager.js` | 播放控制 + WebSocket 连接（含计划执行检查） |
+| `web/modules/light-schedule-manager.js` | 灯光计划管理器（轮询 + 帧级执行 + 手动覆盖） |
+| `web/modules/light-timeline.js` | 灯光时间线 UI（批量选择 + 三种时间模式 + 持续时间） |
+| `web/modules/light-manager.js` | 灯光状态管理器（setLight / getAllStates） |
+| `web/modules/ui/sat-light-controls.js` | 卫星灯光手动控制（30秒覆盖机制） |
 | `web/modules/ui/constellation-panel.js` | 星座面板 + 灯光控制 |
-| `web/modules/modes/ws-mode.js` | WS 模式 |
+| `web/modules/modes/ws-mode.js` | WS 模式（含计划执行检查） |
 | `web/modules/interpolation.js` | 插值算法 |
 | `web/modules/views/first-person.js` | 地面视角渲染 |
 
@@ -332,7 +363,7 @@ Local (本地地平坐标系: 方位角/仰角/距离)
 
 ### Q: 如何查看数据库中的表？
 
-**A**: 连接 MySQL 后执行 `SHOW TABLES;`，应看到 `configurations`, `protocol_logs`, `satellites`, `satellite_neighbors`, `alembic_version`。
+**A**: 连接 MySQL 后执行 `SHOW TABLES;`，应看到 `configurations`, `protocol_logs`, `satellites`, `satellite_neighbors`, `light_schedules`, `alembic_version`。
 
 ### Q: 如何执行数据库迁移？
 
@@ -379,6 +410,7 @@ test: 测试代码
 | **Phase 2** | MySQL 入库（配置 + 协议日志 + 星座数据） | ✅ 完成 |
 | **Phase 3** | WebSocket 整合到 FastAPI（单端口统一服务） | ✅ 完成 |
 | **Phase 4** | 配置系统迁移到 Pydantic BaseModel | ✅ 完成 |
+| **Phase 5** | 时间基灯光调度系统（前端帧级执行 + 手动覆盖） | ✅ 完成 |
 
 ---
 
@@ -401,5 +433,5 @@ MIT License
 
 ---
 
-**最后更新**: 2026-04-20  
-**版本**: v3.1（FastAPI 统一架构 + SQLModel + MySQL + Pydantic 配置）
+**最后更新**: 2026-04-21  
+**版本**: v3.2（FastAPI 统一架构 + SQLModel + MySQL + Pydantic 配置 + 时间基灯光调度）

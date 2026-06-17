@@ -1,9 +1,10 @@
 // ======================== 卫星编队可视化面板 ========================
 import * as THREE from 'three';
-import { parseTimestamp, dateToJD, calcGMST, eciToEcef, ecefToLocal } from '../math-utils.js';
+import { parseTimestamp, dateToJD, calcGMST, eciToEcef, ecefToLocal, eciToHill } from '../math-utils.js';
 import { DEG, RE_KM, RE_3D } from '../config.js';
 import { createProtocolConfirmBar } from './protocol-confirm-bar.js';
 import { createLightTimeline } from '../light-timeline.js';
+import { processImage } from '../image-processor.js';
 
 const PANEL_WIDTH = 400;
 const PANEL_HEIGHT = 400;
@@ -72,11 +73,131 @@ export function createConstellationPanel(appState) {
         `;
         timelineToggle.onclick = toggleTimeline;
 
+        // 全屏切换按钮
+        let isFullscreen = false;
+        const fullscreenBtn = document.createElement('button');
+        fullscreenBtn.textContent = '⛶ 全屏';
+        fullscreenBtn.style.cssText = `
+            background: #2a4a6a;
+            border: 1px solid #4488ff;
+            color: #fff;
+            padding: 3px 10px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+        `;
+        
+        // Escape键退出全屏
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && isFullscreen) {
+                fullscreenBtn.click();
+            }
+        });
+        
+        fullscreenBtn.onclick = () => {
+            isFullscreen = !isFullscreen;
+            if (isFullscreen) {
+                // 保存原始样式
+                const origWidth = panel.style.width;
+                const origHeight = panel.style.height;
+                panel.dataset.origWidth = origWidth;
+                panel.dataset.origHeight = origHeight;
+                
+                // 进入全屏
+                panel.style.width = '100vw';
+                panel.style.height = '100vh';
+                panel.style.top = '0';
+                panel.style.left = '0';
+                panel.style.transform = 'none';
+                panel.style.borderRadius = '0';
+                
+                // 调整画布大小
+                const newWidth = window.innerWidth - 40;
+                const newHeight = window.innerHeight - 80;
+                canvas.width = newWidth;
+                canvas.height = newHeight;
+                canvas.style.width = newWidth + 'px';
+                canvas.style.height = newHeight + 'px';
+                
+                fullscreenBtn.textContent = '✕ 退出全屏';
+                fullscreenBtn.style.background = '#6a2a2a';
+                fullscreenBtn.style.borderColor = '#ff4444';
+                
+                // 重新渲染
+                requestAnimationFrame(() => render());
+            } else {
+                // 退出全屏
+                panel.style.width = panel.dataset.origWidth || PANEL_WIDTH + 'px';
+                panel.style.height = panel.dataset.origHeight || 'auto';
+                panel.style.top = '50%';
+                panel.style.left = '50%';
+                panel.style.transform = 'translate(-50%, -50%)';
+                panel.style.borderRadius = '10px';
+                
+                // 恢复画布大小
+                canvas.width = PANEL_WIDTH;
+                canvas.height = PANEL_HEIGHT;
+                canvas.style.width = PANEL_WIDTH + 'px';
+                canvas.style.height = PANEL_HEIGHT + 'px';
+                
+                fullscreenBtn.textContent = '⛶ 全屏';
+                fullscreenBtn.style.background = '#2a4a6a';
+                fullscreenBtn.style.borderColor = '#4488ff';
+                
+                // 重新渲染
+                requestAnimationFrame(() => render());
+            }
+        };
+
         const closeBtn = document.createElement('button');
         closeBtn.textContent = '✕';
         closeBtn.style.cssText = 'background: none; border: none; color: #fff; font-size: 20px; cursor: pointer;';
         closeBtn.onclick = hide;
 
+        // 图案上传按钮
+        const uploadBtn = document.createElement('button');
+        uploadBtn.textContent = '📷 上传图案';
+        uploadBtn.style.cssText = `
+            background: #2a6a4a;
+            border: 1px solid #44ff88;
+            color: #fff;
+            padding: 3px 10px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+        `;
+        uploadBtn.onclick = handlePatternUpload;
+
+        // 重置灯光按钮
+        const resetBtn = document.createElement('button');
+        resetBtn.textContent = '↩️ 重置';
+        resetBtn.style.cssText = `
+            background: #6a4a2a;
+            border: 1px solid #ff8844;
+            color: #fff;
+            padding: 3px 10px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+        `;
+        resetBtn.onclick = handleResetLights;
+
+        // 反转复选框
+        const invertContainer = document.createElement('label');
+        invertContainer.style.cssText = 'display: flex; align-items: center; gap: 4px; color: #aaa; font-size: 11px; cursor: pointer;';
+        const invertCheckbox = document.createElement('input');
+        invertCheckbox.type = 'checkbox';
+        invertCheckbox.id = 'invertPattern';
+        invertCheckbox.style.cssText = 'cursor: pointer;';
+        const invertLabel = document.createElement('span');
+        invertLabel.textContent = '反转';
+        invertContainer.appendChild(invertCheckbox);
+        invertContainer.appendChild(invertLabel);
+
+        rightButtons.appendChild(fullscreenBtn);
+        rightButtons.appendChild(uploadBtn);
+        rightButtons.appendChild(resetBtn);
+        rightButtons.appendChild(invertContainer);
         rightButtons.appendChild(timelineToggle);
         rightButtons.appendChild(closeBtn);
         titleBar.appendChild(title);
@@ -237,26 +358,30 @@ export function createConstellationPanel(appState) {
         if (!ctx) return;
         if (!isVisible) return;
 
+        // 获取当前画布尺寸
+        const W = canvas.width;
+        const H = canvas.height;
+
         // 清空画布
         ctx.fillStyle = '#0a0a1e';
-        ctx.fillRect(0, 0, PANEL_WIDTH, PANEL_HEIGHT);
+        ctx.fillRect(0, 0, W, H);
 
         // 绘制背景网格
         ctx.strokeStyle = '#223';
         ctx.lineWidth = 1;
-        for (let i = 0; i <= PANEL_WIDTH; i += 40) {
-            ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, PANEL_HEIGHT); ctx.stroke();
+        for (let i = 0; i <= W; i += 40) {
+            ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, H); ctx.stroke();
         }
-        for (let i = 0; i <= PANEL_HEIGHT; i += 40) {
-            ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(PANEL_WIDTH, i); ctx.stroke();
+        for (let i = 0; i <= H; i += 40) {
+            ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(W, i); ctx.stroke();
         }
 
         // 绘制十字准星
         ctx.strokeStyle = '#4488ff';
         ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.moveTo(PANEL_WIDTH / 2, 0); ctx.lineTo(PANEL_WIDTH / 2, PANEL_HEIGHT);
-        ctx.moveTo(0, PANEL_HEIGHT / 2); ctx.lineTo(PANEL_WIDTH, PANEL_HEIGHT / 2);
+        ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H);
+        ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2);
         ctx.stroke();
 
         // 获取当前卫星数据
@@ -277,7 +402,8 @@ export function createConstellationPanel(appState) {
             }
         } else if (currentMode === 'ws' && appState.ws.lastStepData) {
             satData = appState.ws.lastStepData.map(d => ({
-                X: d[8], Y: d[9], Z: d[10]
+                X: d[8], Y: d[9], Z: d[10],
+                Vx: d[11], Vy: d[12], Vz: d[13]
             }));
             const d = parseTimestamp(appState.ws.lastStepData[0][0]);
             gmst = calcGMST(dateToJD(d.year, d.month, d.day, d.hour, d.minute, d.second));
@@ -287,76 +413,80 @@ export function createConstellationPanel(appState) {
             ctx.fillStyle = '#666';
             ctx.font = '14px Arial';
             ctx.textAlign = 'center';
-            ctx.fillText('无卫星数据', PANEL_WIDTH / 2, PANEL_HEIGHT / 2);
+            ctx.fillText('无卫星数据', W / 2, H / 2);
             return;
         }
 
         const { currentLat, currentLon } = appState.interaction;
 
-        // 计算方位角和仰角
-        const rawAngles = [];
+        // 获取主星（第一颗卫星）数据
+        const chief = satData[0];
+        const chiefData = {
+            X: chief.X !== undefined ? chief.X : chief[8],
+            Y: chief.Y !== undefined ? chief.Y : chief[9],
+            Z: chief.Z !== undefined ? chief.Z : chief[10],
+            Vx: chief.Vx !== undefined ? chief.Vx : (chief[11] || 0),
+            Vy: chief.Vy !== undefined ? chief.Vy : (chief[12] || 0),
+            Vz: chief.Vz !== undefined ? chief.Vz : (chief[13] || 0)
+        };
+
+        // 计算 Hill 坐标 (沿轨 S, 法向 W)
+        const hillCoords = [];
         satData.forEach((sat, idx) => {
             try {
                 const X = sat.X !== undefined ? sat.X : sat[8];
                 const Y = sat.Y !== undefined ? sat.Y : sat[9];
                 const Z = sat.Z !== undefined ? sat.Z : sat[10];
-
-                const ecef = eciToEcef(X, Y, Z, gmst);
-                const local = ecefToLocal(ecef.x, ecef.y, ecef.z, currentLat, currentLon);
                 
-                let az = local.az;
-                if (az > 180) az -= 360;
-
-                rawAngles.push({ idx, az, el: local.el });
+                const hill = eciToHill(chiefData, { X, Y, Z });
+                hillCoords.push({ idx, s: hill.alongTrack, w: hill.crossTrack });
             } catch (e) {
-                console.error(`[CONSTELLATION] 卫星${idx} 处理失败:`, e.message);
+                console.error(`[CONSTELLATION] 卫星${idx} Hill坐标计算失败:`, e.message);
             }
         });
 
-        if (rawAngles.length === 0) return;
+        if (hillCoords.length === 0) return;
 
         // 计算边界框
-        let minAz = Infinity, maxAz = -Infinity, minEl = Infinity, maxEl = -Infinity;
-        rawAngles.forEach(s => {
-            if (s.az < minAz) minAz = s.az;
-            if (s.az > maxAz) maxAz = s.az;
-            if (s.el < minEl) minEl = s.el;
-            if (s.el > maxEl) maxEl = s.el;
+        let minS = Infinity, maxS = -Infinity, minW = Infinity, maxW = -Infinity;
+        hillCoords.forEach(h => {
+            if (h.s < minS) minS = h.s;
+            if (h.s > maxS) maxS = h.s;
+            if (h.w < minW) minW = h.w;
+            if (h.w > maxW) maxW = h.w;
         });
 
-        const centerAz = (minAz + maxAz) / 2;
-        const centerEl = (minEl + maxEl) / 2;
-        let spanAz = maxAz - minAz;
-        let spanEl = maxEl - minEl;
+        const centerS = (minS + maxS) / 2;
+        const centerW = (minW + maxW) / 2;
+        let spanS = maxS - minS;
+        let spanW = maxW - minW;
 
-        if (spanAz < 0.0001) spanAz = 0.0001;
-        if (spanEl < 0.0001) spanEl = 0.0001;
+        // 确保最小跨度（避免所有卫星在同一位置）
+        if (spanS < 0.001) spanS = 0.001;
+        if (spanW < 0.001) spanW = 0.001;
 
-        const FORMATION_SCALE = 5;
-        spanAz *= FORMATION_SCALE;
-        spanEl *= FORMATION_SCALE;
-
-        const maxSpan = Math.max(spanAz, spanEl);
-        const PADDING = 20;
-        const viewSpan = maxSpan * 1.15;
-        const scale = (PANEL_WIDTH / 2 - PADDING) / (viewSpan / 2);
+        // 自适应缩放：让编队填满画布的 80%
+        const FILL_RATIO = 0.8;
+        const maxSpan = Math.max(spanS, spanW);
+        const PADDING = 40;
+        const scale = (W / 2 - PADDING) / (maxSpan / 2) * FILL_RATIO;
 
         const satInView = [];
 
-        rawAngles.forEach(s => {
-            const offsetAz = (s.az - centerAz) * FORMATION_SCALE;
-            const offsetEl = (s.el - centerEl) * FORMATION_SCALE;
+        hillCoords.forEach(h => {
+            const offsetS = (h.s - centerS) * scale;
+            const offsetW = (h.w - centerW) * scale;
             
-            const x = (PANEL_WIDTH / 2) + offsetAz * scale;
-            const y = (PANEL_HEIGHT / 2) - offsetEl * scale;
+            const x = (W / 2) + offsetS;  // S → x (沿轨方向水平)
+            const y = (H / 2) - offsetW;  // W → y (法向方向垂直，注意y轴向下)
 
             satInView.push({
                 x, y,
-                idx: s.idx,
-                az: s.az,
-                el: s.el,
-                isLightOn: lightMgr.getLightState(s.idx) || false,
-                pendingCommand: confirmBar ? confirmBar.getPendingCommand(s.idx) : null,
+                idx: h.idx,
+                s: h.s,
+                w: h.w,
+                isLightOn: lightMgr.getLightState(h.idx) || false,
+                pendingCommand: confirmBar ? confirmBar.getPendingCommand(h.idx) : null,
             });
         });
 
@@ -443,26 +573,26 @@ export function createConstellationPanel(appState) {
         // 图例
         ctx.fillStyle = '#ffdd44';
         ctx.beginPath();
-        ctx.arc(30, PANEL_HEIGHT - 30, 6, 0, Math.PI * 2);
+        ctx.arc(30, H - 30, 6, 0, Math.PI * 2);
         ctx.fill();
         ctx.fillStyle = '#fff';
         ctx.font = '12px Arial';
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
-        ctx.fillText('开灯', 45, PANEL_HEIGHT - 30);
+        ctx.fillText('开灯', 45, H - 30);
 
         ctx.fillStyle = '#2a4a3a';
         ctx.strokeStyle = '#00ff00';
         ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.arc(110, PANEL_HEIGHT - 30, 6, 0, Math.PI * 2);
+        ctx.arc(110, H - 30, 6, 0, Math.PI * 2);
         ctx.fill();
         ctx.stroke();
         ctx.fillStyle = '#fff';
-        ctx.fillText('关灯', 125, PANEL_HEIGHT - 30);
+        ctx.fillText('关灯', 125, H - 30);
 
         ctx.fillStyle = '#888';
-        ctx.fillText('点击卫星选择/取消', 220, PANEL_HEIGHT - 30);
+        ctx.fillText('点击卫星选择/取消', 220, H - 30);
     }
 
     /**
@@ -493,6 +623,85 @@ export function createConstellationPanel(appState) {
                 return;
             }
         }
+    }
+
+    /**
+     * 处理图案上传
+     */
+    async function handlePatternUpload() {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'image/*';
+        
+        input.onchange = async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            try {
+                console.log('[PATTERN] 开始处理图像:', file.name);
+                
+                // 获取卫星数量
+                const satCount = appState.config?.satCount || satPositions.length || 100;
+                
+                // 处理图像（新API：传入卫星位置，返回点亮决策）
+                const { lightMap, previewData, shapePoints, transform, width, height } = 
+                    await processImage(file, satPositions, satCount);
+                
+                console.log(`[PATTERN] 图像处理完成: ${width}x${height}`);
+                console.log(`[PATTERN] 形状点: ${shapePoints.length}, 变换: angle=${transform?.bestAngle?.toFixed(1)}°, scale=${transform?.bestScale?.toFixed(3)}, tx=${transform?.bestTx?.toFixed(2)}, ty=${transform?.bestTy?.toFixed(2)}`);
+                console.log(`[PATTERN] 点亮卫星: ${lightMap.size} 颗`);
+                
+                // 应用灯光状态
+                const lightMgr = appState.lightManager;
+                if (lightMgr) {
+                    // 先关闭所有灯光
+                    for (let i = 0; i < satCount; i++) {
+                        lightMgr.setLight(i, false);
+                    }
+                    
+                    // 点亮图案对应的卫星
+                    lightMap.forEach((isOn, idx) => {
+                        if (isOn) {
+                            lightMgr.setLight(idx, true);
+                        }
+                    });
+                    
+                    console.log('[PATTERN] 灯光已应用');
+                }
+                
+                // 重新渲染
+                render();
+                
+            } catch (err) {
+                console.error('[PATTERN] 图像处理失败:', err);
+                alert('图像处理失败: ' + err.message);
+            }
+        };
+        
+        input.click();
+    }
+
+    /**
+     * 重置灯光
+     */
+    function handleResetLights() {
+        const lightMgr = appState.lightManager;
+        if (!lightMgr) return;
+        
+        const satCount = appState.config?.satCount || satPositions.length || 100;
+        
+        // 关闭所有灯光
+        for (let i = 0; i < satCount; i++) {
+            lightMgr.setLight(i, false);
+        }
+        
+        // 清空确认栏
+        if (confirmBar) {
+            confirmBar.clear();
+        }
+        
+        console.log('[PATTERN] 灯光已重置');
+        render();
     }
 
     /**
