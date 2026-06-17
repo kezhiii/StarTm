@@ -141,3 +141,72 @@ export function formatTimestamp(ts) {
     const d = parseTimestamp(ts);
     return `${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')} ${String(d.hour).padStart(2,'0')}:${String(d.minute).padStart(2,'0')}:${String(d.second).padStart(2,'0')}`;
 }
+
+/**
+ * 将 ECEF 方向向量投影到观察者处的 SEZ (South-East-Zenith) 切平面
+ * @param {Object} dir - ECEF 方向向量 {x, y, z}（单位向量或任意长度）
+ * @param {number} latDeg - 观察者纬度 (度)
+ * @param {number} lonDeg - 观察者经度 (度)
+ * @returns {Object} {south, east, zenith}
+ */
+export function projectToSEZ(dir, latDeg, lonDeg) {
+    const latR = latDeg * DEG;
+    const lonR = lonDeg * DEG;
+    const sinLat = Math.sin(latR), cosLat = Math.cos(latR);
+    const sinLon = Math.sin(lonR), cosLon = Math.cos(lonR);
+    return {
+        south:  sinLat * cosLon * dir.x + sinLat * sinLon * dir.y - cosLat * dir.z,
+        east:  -sinLon * dir.x + cosLon * dir.y,
+        zenith: cosLat * cosLon * dir.x + cosLat * sinLon * dir.y + sinLat * dir.z
+    };
+}
+
+/**
+ * 计算 Hill 帧到地面观察者视角的旋转补偿角
+ *
+ * Hill 帧的沿轨 (S) 和法向 (W) 方向在地面观察者的方位角/仰角平面上
+ * 通常不是水平和垂直的。本函数计算这个旋转角，使得在匹配前对图案
+ * 施加反向旋转后，地面观察者看到的图案是正的。
+ *
+ * @param {Object} chief - 主星 ECI 状态 {X, Y, Z, Vx, Vy, Vz} (km, km/s)
+ * @param {number} observerLat - 观察者纬度 (度)
+ * @param {number} observerLon - 观察者经度 (度)
+ * @param {number} gmst - 格林尼治平恒星时 (弧度)
+ * @returns {number} 补偿角 (度)，用于 rotatePoints
+ */
+export function computeHillToGroundRotation(chief, observerLat, observerLon, gmst) {
+    // 1. 构建 Hill 帧基向量 (ECI)
+    const rLen = Math.sqrt(chief.X ** 2 + chief.Y ** 2 + chief.Z ** 2);
+    const rHat = { x: chief.X / rLen, y: chief.Y / rLen, z: chief.Z / rLen };
+
+    // h = r × v (轨道角动量方向)
+    const hx = chief.Y * chief.Vz - chief.Z * chief.Vy;
+    const hy = chief.Z * chief.Vx - chief.X * chief.Vz;
+    const hz = chief.X * chief.Vy - chief.Y * chief.Vx;
+    const hLen = Math.sqrt(hx ** 2 + hy ** 2 + hz ** 2);
+    const wHat = { x: hx / hLen, y: hy / hLen, z: hz / hLen };
+
+    // S = W × R (沿轨方向)
+    const sHat = {
+        x: wHat.y * rHat.z - wHat.z * rHat.y,
+        y: wHat.z * rHat.x - wHat.x * rHat.z,
+        z: wHat.x * rHat.y - wHat.y * rHat.x
+    };
+
+    // 2. ECI → ECEF 旋转
+    const sEcef = eciToEcef(sHat.x, sHat.y, sHat.z, gmst);
+    const wEcef = eciToEcef(wHat.x, wHat.y, wHat.z, gmst);
+
+    // 3. 投影到观察者 SEZ 切平面
+    const sSEZ = projectToSEZ(sEcef, observerLat, observerLon);
+    const wSEZ = projectToSEZ(wEcef, observerLat, observerLon);
+
+    // 4. 计算沿轨方向在 az/el 平面上的投影角
+    const phiS = Math.atan2(sSEZ.east, -sSEZ.south);
+
+    // 补偿角 = -phiS
+    const phiComp = -phiS;
+
+    // 转换为角度（rotatePoints 使用角度制）
+    return phiComp * 180 / Math.PI;
+}
