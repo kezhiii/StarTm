@@ -26,8 +26,13 @@ Thumbs.db
 *.xls
 Input/fig/
 
-# 文档和专利文件
-docs/
+# 文档和专利文件（保留 GUIDE.md 和 README.md）
+docs/专利/
+docs/*.docx
+docs/*.doc
+docs/*.pdf
+docs/*.pptx
+docs/*.ppt
 *.docx
 *.doc
 *.pdf
