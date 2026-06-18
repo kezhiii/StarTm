@@ -60,8 +60,12 @@ opencode.json
 
 # 生成的文件
 *_media/
-*_centerOEmat.txt
-*_deputyOEmat.txt
+
+# 图标文件
+*.ico
+
+# 输入数据文件
+Input/*.txt
 
 # 测试文件
 test-*.js

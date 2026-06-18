@@ -1,6 +1,6 @@
 // ======================== 卫星编队可视化面板 ========================
 import * as THREE from 'three';
-import { parseTimestamp, dateToJD, calcGMST, eciToEcef, ecefToLocal, eciToHill, computeHillToGroundRotation } from '../math-utils.js';
+import { parseTimestamp, dateToJD, calcGMST, eciToEcef, ecefToLocal, eciToHill, computeHillToGroundMatrix } from '../math-utils.js';
 import { DEG, RE_KM, RE_3D } from '../config.js';
 import { createProtocolConfirmBar } from './protocol-confirm-bar.js';
 import { createLightTimeline } from '../light-timeline.js';
@@ -21,6 +21,9 @@ export function createConstellationPanel(appState) {
     let confirmBar = null;
     let timeline = null;
     let timelineToggle = null;
+
+    // 地面视角补偿：M⁻¹矩阵 {a,b,c,d}，由 computeHillToGroundMatrix 返回
+    let transformMatrix = null;
 
     /**
      * 初始化面板
@@ -643,8 +646,6 @@ export function createConstellationPanel(appState) {
                 // 获取卫星数量
                 const satCount = appState.config?.satCount || satPositions.length || 100;
                 
-                // 计算地面视角补偿旋转角
-                let groundAngle = 0;
                 try {
                     const currentMode = appState.currentMode;
                     let chiefState = null;
@@ -671,24 +672,27 @@ export function createConstellationPanel(appState) {
                     
                     if (chiefState) {
                         const { currentLat, currentLon } = appState.interaction;
-                        groundAngle = computeHillToGroundRotation(chiefState, currentLat, currentLon, gmst);
-                        console.log(`[PATTERN] 地面视角补偿角: ${groundAngle.toFixed(2)}° (观察者: ${currentLat.toFixed(1)}°, ${currentLon.toFixed(1)}°)`);
-                        console.log(`[PATTERN] 主星ECI: X=${chiefState.X.toFixed(1)}, Y=${chiefState.Y.toFixed(1)}, Z=${chiefState.Z.toFixed(1)} | GMST=${(gmst/DEG).toFixed(2)}°`);
-                        
-                        // 检查编队是否在观察者视野中
+                        transformMatrix = computeHillToGroundMatrix(chiefState, currentLat, currentLon, gmst);
                         const chiefEcef = eciToEcef(chiefState.X, chiefState.Y, chiefState.Z, gmst);
                         const chiefLocal = ecefToLocal(chiefEcef.x, chiefEcef.y, chiefEcef.z, currentLat, currentLon);
-                        if (chiefLocal.el < 0) {
-                            console.warn(`[PATTERN] 编队在地平线以下 (仰角=${chiefLocal.el.toFixed(1)}°)，匹配仅用于参考`);
+                        if (transformMatrix) {
+                            console.log(`[PATTERN] M⁻¹: a=${transformMatrix.a.toFixed(4)}, b=${transformMatrix.b.toFixed(4)}, c=${transformMatrix.c.toFixed(4)}, d=${transformMatrix.d.toFixed(4)} | 方位角: ${chiefLocal.az.toFixed(1)}°, 仰角: ${chiefLocal.el.toFixed(1)}°`);
+                        } else {
+                            console.log(`[PATTERN] 编队不可见 (仰角=${chiefLocal.el.toFixed(1)}°)，跳过补偿`);
                         }
+                        console.log(`[PATTERN] 主星 ECI: X=${chiefState.X.toFixed(1)}, Y=${chiefState.Y.toFixed(1)}, Z=${chiefState.Z.toFixed(1)} | GMST=${(gmst/DEG).toFixed(2)}°`);
                     }
                 } catch (e) {
                     console.warn('[PATTERN] 计算地面补偿角失败，跳过旋转:', e.message);
                 }
                 
-                // 处理图像（传入地面旋转补偿角）
+                // 使用 Hill 坐标 (S, W) 而非屏幕坐标进行匹配
+                const hillPositions = satPositions.map(s => ({ x: s.s, y: s.w, idx: s.idx }));
+                // 处理图像（传入 M⁻¹ 矩阵，processImage 内部禁用角度搜索）
                 const { lightMap, previewData, shapePoints, transform, width, height } = 
-                    await processImage(file, satPositions, satCount, { groundRotationAngle: groundAngle });
+                    await processImage(file, hillPositions, satCount, { transformMatrix });
+                
+                console.log(`[PATTERN] 变换: scale=${transform?.bestScale?.toFixed(3)}, tx=${transform?.bestTx?.toFixed(2)}, ty=${transform?.bestTy?.toFixed(2)}`);
                 
                 console.log(`[PATTERN] 图像处理完成: ${width}x${height}`);
                 console.log(`[PATTERN] 形状点: ${shapePoints.length}, 变换: angle=${transform?.bestAngle?.toFixed(1)}°, scale=${transform?.bestScale?.toFixed(3)}, tx=${transform?.bestTx?.toFixed(2)}, ty=${transform?.bestTy?.toFixed(2)}`);

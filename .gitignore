@@ -1,0 +1,43 @@
+# Project configuration
+opencode.json
+
+# Non-code, non-md documents
+*.docx
+*.doc
+*.pdf
+*.pptx
+*.ppt
+
+# Data / spreadsheet files
+*.xlsx
+*.xls
+
+# Plain text data files
+protocol_extracted.txt
+
+# Media files
+*.ico
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.bmp
+*.svg
+
+# Editor / IDE
+.vscode/
+.idea/
+
+# System
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+
+# Project directories
+.lingma/
+.superpowers/

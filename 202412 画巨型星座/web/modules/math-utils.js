@@ -164,9 +164,11 @@ export function projectToSEZ(dir, latDeg, lonDeg) {
 /**
  * 计算 Hill 帧到地面观察者视角的旋转补偿角
  *
- * Hill 帧的沿轨 (S) 和法向 (W) 方向在地面观察者的方位角/仰角平面上
- * 通常不是水平和垂直的。本函数计算这个旋转角，使得在匹配前对图案
- * 施加反向旋转后，地面观察者看到的图案是正的。
+ * 将 Hill 帧的沿轨 (S) 和法向 (W) 方向投影到观察者的视线平面
+ * （垂直于观察者→卫星连线的平面），计算 S 方向在该平面上的旋转角。
+ *
+ * 与旧版的区别：旧版投影到 SEZ 水平面，当卫星仰角较高时误差很大。
+ * 新版投影到视线平面，正确反映观察者看到的图案旋转。
  *
  * @param {Object} chief - 主星 ECI 状态 {X, Y, Z, Vx, Vy, Vz} (km, km/s)
  * @param {number} observerLat - 观察者纬度 (度)
@@ -197,26 +199,126 @@ export function computeHillToGroundRotation(chief, observerLat, observerLon, gms
     const sEcef = eciToEcef(sHat.x, sHat.y, sHat.z, gmst);
     const wEcef = eciToEcef(wHat.x, wHat.y, wHat.z, gmst);
 
-    // 3. 投影到观察者 SEZ 切平面
+    // 3. 投影到观察者 SEZ 帧
     const sSEZ = projectToSEZ(sEcef, observerLat, observerLon);
-    const wSEZ = projectToSEZ(wEcef, observerLat, observerLon);
 
-    // 边缘情况：编队接近天顶（仰角 > 85°）
-    // 此时方位角定义不稳定，水平投影消失时无法确定旋转角
-    const sHoriz = Math.sqrt(sSEZ.south ** 2 + sSEZ.east ** 2);
-    const wHoriz = Math.sqrt(wSEZ.south ** 2 + wSEZ.east ** 2);
+    // 4. 计算观察者→卫星的视线向量 (SEZ 帧)
+    // 先将主星 ECEF 位置转为本地坐标，获取方位角和仰角
+    const chiefEcef = eciToEcef(chief.X, chief.Y, chief.Z, gmst);
+    const local = ecefToLocal(chiefEcef.x, chiefEcef.y, chiefEcef.z, observerLat, observerLon);
+    const azRad = local.az * DEG;
+    const elRad = local.el * DEG;
 
-    if (sHoriz < 0.01 && wHoriz < 0.01) {
-        console.warn('[ROTATION] 编队接近天顶，跳过地面视角补偿');
+    // 地平线以下：跳过补偿
+    if (local.el < 0) {
+        console.warn('[ROTATION] 编队在地平线以下，跳过地面视角补偿');
         return 0;
     }
 
-    // 4. 计算沿轨方向在 az/el 平面上的投影角
-    const phiS = Math.atan2(sSEZ.east, -sSEZ.south);
+    // 视线单位向量 (SEZ: S=南, E=东, Z=天顶)
+    // 方位角从北顺时针：az=0→北(-S), az=90→东(+E), az=180→南(+S)
+    const losS = -Math.cos(elRad) * Math.cos(azRad);
+    const losE = Math.cos(elRad) * Math.sin(azRad);
+    const losZ = Math.sin(elRad);
+
+    // 5. 构建视线平面坐标系
+    // "上"方向：天顶在视线平面上的投影
+    const zenithDotLos = losZ; // zenith = (0,0,1), dot los = losZ
+    let upS = -zenithDotLos * losS;
+    let upE = -zenithDotLos * losE;
+    let upZ = 1 - zenithDotLos * losZ;
+    const upLen = Math.sqrt(upS * upS + upE * upE + upZ * upZ);
+    if (upLen < 0.01) {
+        console.warn('[ROTATION] 编队接近天顶，跳过地面视角补偿');
+        return 0;
+    }
+    upS /= upLen; upE /= upLen; upZ /= upLen;
+
+    // "右"方向：los × up
+    const rightS = losE * upZ - losZ * upE;
+    const rightE = losZ * upS - losS * upZ;
+    const rightZ = losS * upE - losE * upS;
+
+    // 6. 将 Hill 帧的 S 和 W 投影到视线平面 (right, up)
+    const sProjRight = sSEZ.south * rightS + sSEZ.east * rightE + sSEZ.zenith * rightZ;
+    const sProjUp = sSEZ.south * upS + sSEZ.east * upE + sSEZ.zenith * upZ;
+
+    // 7. 计算 S 方向在视线平面上的旋转角（从 "上" 到 "右"）
+    const phiS = Math.atan2(sProjRight, sProjUp);
 
     // 补偿角 = -phiS
     const phiComp = -phiS;
 
-    // 转换为角度（rotatePoints 使用角度制）
+    // 转换为角度
     return phiComp / DEG;
+}
+
+/**
+ * 计算 Hill→LOS 完整投影矩阵的逆矩阵 M⁻¹。
+ * 
+ * 将 shape 乘以 M⁻¹ 得到 Hill 空间中应该点亮卫星的位置，
+ * 使观察者在地面看到正确的图案：
+ *   M⁻¹(shape_in_SW) → Hill 空间卫星位置
+ *   观察者看到: M(Hill_sat_positions) = shape_in_SW
+ *
+ * @param {Object} chief - 主星 ECI 状态 {X, Y, Z, Vx, Vy, Vz}
+ * @param {number} observerLat - 观察者纬度 (度)
+ * @param {number} observerLon - 观察者经度 (度)
+ * @param {number} gmst - 格林尼治平恒星时 (弧度)
+ * @returns {Object|null} { a, b, c, d } | null (不可见时返回 null)
+ *   其中 M⁻¹ = [[a, b], [c, d]]
+ *   shape_corrected_x = a * x_shape + b * y_shape
+ *   shape_corrected_y = c * x_shape + d * y_shape
+ */
+export function computeHillToGroundMatrix(chief, observerLat, observerLon, gmst) {
+    const rLen = Math.sqrt(chief.X ** 2 + chief.Y ** 2 + chief.Z ** 2);
+    const rHat = { x: chief.X / rLen, y: chief.Y / rLen, z: chief.Z / rLen };
+    const hx = chief.Y * chief.Vz - chief.Z * chief.Vy;
+    const hy = chief.Z * chief.Vx - chief.X * chief.Vz;
+    const hz = chief.X * chief.Vy - chief.Y * chief.Vx;
+    const hLen = Math.sqrt(hx ** 2 + hy ** 2 + hz ** 2);
+    const wHat = { x: hx / hLen, y: hy / hLen, z: hz / hLen };
+    const sHat = {
+        x: wHat.y * rHat.z - wHat.z * rHat.y,
+        y: wHat.z * rHat.x - wHat.x * rHat.z,
+        z: wHat.x * rHat.y - wHat.y * rHat.x
+    };
+
+    const sEcef = eciToEcef(sHat.x, sHat.y, sHat.z, gmst);
+    const wEcef = eciToEcef(wHat.x, wHat.y, wHat.z, gmst);
+
+    const sSEZ = projectToSEZ(sEcef, observerLat, observerLon);
+    const wSEZ = projectToSEZ(wEcef, observerLat, observerLon);
+
+    const chiefEcef = eciToEcef(chief.X, chief.Y, chief.Z, gmst);
+    const local = ecefToLocal(chiefEcef.x, chiefEcef.y, chiefEcef.z, observerLat, observerLon);
+    const elRad = local.el * DEG;
+    if (local.el < 0) { console.warn('[MATRIX] 编队在地平线以下，跳过补偿'); return null; }
+    const azRad = local.az * DEG;
+
+    const losS = -Math.cos(elRad) * Math.cos(azRad);
+    const losE =  Math.cos(elRad) * Math.sin(azRad);
+    const losZ =  Math.sin(elRad);
+
+    const zdot = losZ;
+    let upS = -zdot * losS, upE = -zdot * losE, upZ = 1 - zdot * losZ;
+    const upLen = Math.sqrt(upS*upS + upE*upE + upZ*upZ);
+    if (upLen < 0.01) { console.warn('[MATRIX] 编队接近天顶，跳过补偿'); return null; }
+    upS /= upLen; upE /= upLen; upZ /= upLen;
+
+    const rS = losE*upZ - losZ*upE;
+    const rE = losZ*upS - losS*upZ;
+    const rZ = losS*upE - losE*upS;
+
+    const sR = sSEZ.south*rS + sSEZ.east*rE + sSEZ.zenith*rZ;
+    const sU = sSEZ.south*upS + sSEZ.east*upE + sSEZ.zenith*upZ;
+    const wR = wSEZ.south*rS + wSEZ.east*rE + wSEZ.zenith*rZ;
+    const wU = wSEZ.south*upS + wSEZ.east*upE + wSEZ.zenith*upZ;
+
+    const det = sR * wU - sU * wR;
+    if (Math.abs(det) < 1e-10) { console.warn('[MATRIX] 投影矩阵奇异，跳过补偿'); return null; }
+
+    const result = { a: wU/det, b: -wR/det, c: -sU/det, d: sR/det };
+    console.log(`[MATRIX] M⁻¹: a=${result.a.toFixed(4)}, b=${result.b.toFixed(4)}, c=${result.c.toFixed(4)}, d=${result.d.toFixed(4)}`);
+    return result;
 }
