@@ -22,8 +22,8 @@ constellation:
   # deputy_oe_file: "Input/100sats_rect_deputyOEmat.txt"
   # center_oe_file: "Input/centerOEmat.txt"
   # deputy_oe_file: "Input/deputyOEmat.txt"
-  center_oe_file: "Input/hexagonal_4layers_centerOEmat.txt"
-  deputy_oe_file: "Input/hexagonal_4layers_deputyOEmat.txt"
+  center_oe_file: "Input/hexagonal_5layers_centerOEmat.txt"
+  deputy_oe_file: "Input/hexagonal_5layers_deputyOEmat.txt"
 constellation_params:
   orbit_height: 400000        # 轨道高度 (m)
   inclination_deg: 55         # 轨道倾角 (度)

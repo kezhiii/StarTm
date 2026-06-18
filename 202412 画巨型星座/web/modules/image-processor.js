@@ -573,7 +573,7 @@ function generatePreview(binary, width, height, contour) {
 /**
  * 对点集应用旋转变换
  */
-function rotatePoints(points, angleDeg) {
+export function rotatePoints(points, angleDeg) {
     const rad = angleDeg * Math.PI / 180;
     const cos = Math.cos(rad);
     const sin = Math.sin(rad);
@@ -587,7 +587,7 @@ function rotatePoints(points, angleDeg) {
 /**
  * 对点集应用缩放变换
  */
-function scalePoints(points, scale) {
+export function scalePoints(points, scale) {
     return points.map(p => ({
         x: p.x * scale,
         y: p.y * scale
@@ -1013,7 +1013,7 @@ export function findBestTransform(shapePoints, satPositions, options = {}) {
  * @param {number} radiusThreshold - 点亮半径阈值
  * @returns {Map<number, boolean>} 卫星索引 -> 是否点亮
  */
-function reverseNearestNeighborLighting(shapePoints, satPositions, radiusThreshold) {
+export function reverseNearestNeighborLighting(shapePoints, satPositions, radiusThreshold) {
     const result = new Map();
     let litCount = 0;
     
@@ -1077,6 +1077,42 @@ export function decideLighting(matches, satCount, radiusThreshold) {
     return result;
 }
 
+/**
+ * 增量匹配：在上次最优变换附近局部搜索，跳过完整 grid search
+ * @param {Array} shapePoints - M⁻¹ 变换后的 shape 点
+ * @param {Array} satPositions - 卫星 Hill 坐标 [{x, y}, ...]
+ * @param {Object} prevTransform - 上次最优变换 { bestScale, bestTx, bestTy, bestCost }
+ * @returns {{ lightMap: Map, transform: Object }}
+ */
+export function incrementalMatch(shapePoints, satPositions) {
+    if (satPositions.length < 2) {
+        console.warn('[INCREMENTAL] 卫星数量不足，跳过匹配');
+        return { lightMap: new Map(), transform: { bestScale: 1, bestTx: 0, bestTy: 0, bestCost: Infinity } };
+    }
+
+    const transform = findBestTransform(shapePoints, satPositions, { centerAngle: 0, disableAngleSearch: true });
+
+    const bestScaled = scalePoints(rotatePoints(shapePoints, transform.bestAngle), transform.bestScale);
+    const alignedSat = satPositions.map(s => ({ x: s.x - transform.bestTx, y: s.y - transform.bestTy }));
+
+    const sampleSize = Math.min(50, alignedSat.length);
+    const satNearestDists = [];
+    for (let i = 0; i < sampleSize; i++) {
+        let minDist = Infinity;
+        for (let j = 0; j < alignedSat.length; j++) {
+            if (i === j) continue;
+            const d = Math.sqrt((alignedSat[i].x - alignedSat[j].x) ** 2 + (alignedSat[i].y - alignedSat[j].y) ** 2);
+            if (d < minDist) minDist = d;
+        }
+        satNearestDists.push(minDist);
+    }
+    satNearestDists.sort((a, b) => a - b);
+    const radiusThreshold = satNearestDists[Math.floor(satNearestDists.length / 2)] * 0.6;
+
+    const lightMap = reverseNearestNeighborLighting(bestScaled, alignedSat, radiusThreshold);
+
+    return { lightMap, transform };
+}
 
 /**
  * 完整的图像处理流程
@@ -1153,7 +1189,7 @@ export async function processImage(file, satPositions, satCount, options = {}) {
     // 阈值 = 卫星中位距 × 0.7
     // 这意味着：距离形状点不超过 0.7 倍卫星间距的卫星会被点亮
     // 足够覆盖网格间隙，又不会误点亮远离形状的卫星
-    const radiusThreshold = medianSatDist * 0.7;
+    const radiusThreshold = medianSatDist * 0.6;
     
     console.log(`[PROCESS] 卫星中位距: ${medianSatDist.toFixed(2)}, 点亮半径: ${radiusThreshold.toFixed(2)}`);
     

@@ -4,7 +4,7 @@ import { parseTimestamp, dateToJD, calcGMST, eciToEcef, ecefToLocal, eciToHill, 
 import { DEG, RE_KM, RE_3D } from '../config.js';
 import { createProtocolConfirmBar } from './protocol-confirm-bar.js';
 import { createLightTimeline } from '../light-timeline.js';
-import { processImage } from '../image-processor.js';
+import { processImage, incrementalMatch, reverseNearestNeighborLighting, scalePoints, rotatePoints } from '../image-processor.js';
 
 const PANEL_WIDTH = 400;
 const PANEL_HEIGHT = 400;
@@ -24,6 +24,278 @@ export function createConstellationPanel(appState) {
 
     // 地面视角补偿：M⁻¹矩阵 {a,b,c,d}，由 computeHillToGroundMatrix 返回
     let transformMatrix = null;
+
+    // ===== Auto-match state (will be used by later tasks) =====
+    let autoMatcher = null;
+
+    /**
+     * 获取当前观测角度（方位角/仰角）
+     * @returns {{ azimuth: number, elevation: number, chiefState: object, gmst: number } | null}
+     */
+    function getCurrentObsAngle() {
+        const currentMode = appState.currentMode;
+        let chiefState = null;
+        let gmst = 0;
+
+        if (currentMode === 'csv' && appState.csv.satelliteData) {
+            const idx = appState.csv.state.currentTimeIdx;
+            if (appState.csv.satelliteData[idx]) {
+                const s = appState.csv.satelliteData[idx].sats[0];
+                chiefState = { X: s.X, Y: s.Y, Z: s.Z, Vx: s.Vx, Vy: s.Vy, Vz: s.Vz };
+                const ts = appState.csv.satelliteData[idx].timestamp;
+                const d = parseTimestamp(ts);
+                gmst = calcGMST(dateToJD(d.year, d.month, d.day, d.hour, d.minute, d.second));
+            }
+        } else if (currentMode === 'ws' && appState.ws.lastStepData) {
+            const d0 = appState.ws.lastStepData[0];
+            if (d0 && d0[0] != null) {
+                chiefState = { X: d0[8], Y: d0[9], Z: d0[10], Vx: d0[11], Vy: d0[12], Vz: d0[13] };
+                const d = parseTimestamp(d0[0]);
+                gmst = calcGMST(dateToJD(d.year, d.month, d.day, d.hour, d.minute, d.second));
+            }
+        }
+
+        if (!chiefState) return null;
+
+        const { currentLat, currentLon } = appState.interaction;
+        const chiefEcef = eciToEcef(chiefState.X, chiefState.Y, chiefState.Z, gmst);
+        const local = ecefToLocal(chiefEcef.x, chiefEcef.y, chiefEcef.z, currentLat, currentLon);
+
+        return { azimuth: local.az, elevation: local.el, chiefState, gmst };
+    }
+
+    // ===== Auto-match constants =====
+    const AUTO_MATCH_INTERVAL = 1000;   // 轮询间隔 ms
+    const AZ_THRESHOLD = 5;              // 方位角变化阈值 °
+    const EL_THRESHOLD = 2;              // 仰角变化阈值 °
+    const MIN_MATCH_INTERVAL = 2000;     // 最小触发间隔 ms
+    const CALIBRATION_INTERVAL = 10;     // 每 N 次 tick 强制一次全量校准
+
+    /**
+     * 创建自动跟踪器（两段式：快速差分跟踪 + 定时全量校准）
+     * @param {Array} cachedShapePoints - 原始 shape 点（M⁻¹ 变换前）
+     * @param {Object} cachedTransform - 上次最优变换 {bestScale, bestTx, bestTy, bestCost}
+     * @returns {{ stop: Function, togglePause: Function, getStatus: Function }}
+     */
+    function createAutoMatcher(cachedShapePoints, cachedTransform) {
+        let intervalId = null;
+        let lastAz = null;
+        let lastEl = null;
+        let lastMatchTime = 0;
+        let isPaused = false;
+
+        // 校准缓存
+        let calibrationCountdown = 0;
+        let cachedScale = cachedTransform.bestScale || 1;
+        let cachedTx = cachedTransform.bestTx || 0;
+        let cachedTy = cachedTransform.bestTy || 0;
+        let cachedRadiusThreshold = 0;
+
+        const cachedShape = cachedShapePoints;
+
+        function start() {
+            if (intervalId) return;
+            console.log('[AUTO] 开始自动跟踪 (间隔=1s, 校准每10s)');
+            calibrationCountdown = 0;
+            intervalId = setInterval(tick, AUTO_MATCH_INTERVAL);
+        }
+
+        function stop() {
+            if (intervalId) {
+                clearInterval(intervalId);
+                intervalId = null;
+            }
+            lastAz = null;
+            lastEl = null;
+            console.log('[AUTO] 停止自动跟踪');
+        }
+
+        function pause() {
+            isPaused = true;
+            console.log('[AUTO] 暂停');
+        }
+
+        function resume() {
+            isPaused = false;
+            console.log('[AUTO] 恢复');
+        }
+
+        function tick() {
+            if (isPaused) return;
+
+            const obs = getCurrentObsAngle();
+            if (!obs) return;
+            if (obs.elevation < 0) return;
+
+            const az = obs.azimuth;
+            const el = obs.elevation;
+
+            if (lastAz === null || lastEl === null) {
+                lastAz = az;
+                lastEl = el;
+                return;
+            }
+
+            const dAz = Math.abs(az - lastAz);
+            const dEl = Math.abs(el - lastEl);
+            const timeSinceLastMatch = Date.now() - lastMatchTime;
+
+            const angleBeyondThreshold = (dAz >= AZ_THRESHOLD || dEl >= EL_THRESHOLD) && timeSinceLastMatch >= MIN_MATCH_INTERVAL;
+            const timeForCalibration = calibrationCountdown <= 0;
+
+            if (angleBeyondThreshold || timeForCalibration) {
+                lastAz = az;
+                lastEl = el;
+                reMatch();
+                calibrationCountdown = CALIBRATION_INTERVAL;
+            } else {
+                calibrationCountdown--;
+                fastMatch(obs);
+            }
+        }
+
+        function fastMatch(obs) {
+            try {
+                const { chiefState, gmst } = obs;
+                const { currentLat, currentLon } = appState.interaction;
+
+                const hillCoords = getCurrentHillCoords();
+                if (!hillCoords || hillCoords.length === 0) return;
+
+                const matrix = computeHillToGroundMatrix(chiefState, currentLat, currentLon, gmst);
+                if (!matrix) return;
+                transformMatrix = matrix;
+
+                const { a, b, c, d } = matrix;
+                const effectiveShape = cachedShape.map(p => ({
+                    x: a * p.x - b * p.y,
+                    y: c * p.x - d * p.y
+                }));
+
+                const bestScaled = scalePoints(rotatePoints(effectiveShape, 0), cachedScale);
+                const alignedSat = hillCoords.map(s => ({ x: s.x - cachedTx, y: s.y - cachedTy }));
+
+                if (cachedRadiusThreshold <= 0) return;
+                const lightMap = reverseNearestNeighborLighting(bestScaled, alignedSat, cachedRadiusThreshold);
+
+                const lightMgr = appState.lightManager;
+                if (lightMgr) {
+                    const satCount = hillCoords.length;
+                    for (let i = 0; i < satCount; i++) lightMgr.setLight(i, false);
+                    lightMap.forEach((isOn, idx) => { if (isOn) lightMgr.setLight(idx, true); });
+                }
+
+                render();
+            } catch (e) {
+                console.error('[AUTO] 快速路径失败:', e);
+            }
+        }
+
+        function reMatch() {
+            try {
+                const obs = getCurrentObsAngle();
+                if (!obs) return;
+                if (obs.elevation < 0) return;
+
+                const { chiefState, gmst } = obs;
+                const { currentLat, currentLon } = appState.interaction;
+
+                const hillCoords = getCurrentHillCoords();
+                if (!hillCoords || hillCoords.length === 0) return;
+
+                const matrix = computeHillToGroundMatrix(chiefState, currentLat, currentLon, gmst);
+                if (!matrix) return;
+                transformMatrix = matrix;
+
+                const { a, b, c, d } = matrix;
+                const effectiveShape = cachedShape.map(p => ({
+                    x: a * p.x - b * p.y,
+                    y: c * p.x - d * p.y
+                }));
+
+                const { lightMap, transform } = incrementalMatch(effectiveShape, hillCoords, {});
+                lastMatchTime = Date.now();
+
+                cachedScale = transform.bestScale;
+                cachedTx = transform.bestTx;
+                cachedTy = transform.bestTy;
+
+                // 重新计算半径阈值
+                const bestScaled = scalePoints(rotatePoints(effectiveShape, 0), cachedScale);
+                const alignedSat = hillCoords.map(s => ({ x: s.x - cachedTx, y: s.y - cachedTy }));
+                const sampleSize = Math.min(50, alignedSat.length);
+                const dists = [];
+                for (let i = 0; i < sampleSize; i++) {
+                    let minD = Infinity;
+                    for (let j = 0; j < alignedSat.length; j++) {
+                        if (i === j) continue;
+                        const d = Math.sqrt((alignedSat[i].x - alignedSat[j].x) ** 2 + (alignedSat[i].y - alignedSat[j].y) ** 2);
+                        if (d < minD) minD = d;
+                    }
+                    dists.push(minD);
+                }
+                dists.sort((a, b) => a - b);
+                cachedRadiusThreshold = dists[Math.floor(dists.length / 2)] * 0.65;
+
+                console.log(`[AUTO] 校准完成: scale=${cachedScale.toFixed(3)}, tx=${cachedTx.toFixed(2)}, ty=${cachedTy.toFixed(2)}, 点亮 ${lightMap.size} 颗卫星`);
+
+                const lightMgr = appState.lightManager;
+                if (lightMgr) {
+                    for (let i = 0; i < hillCoords.length; i++) lightMgr.setLight(i, false);
+                    lightMap.forEach((isOn, idx) => { if (isOn) lightMgr.setLight(idx, true); });
+                }
+
+                render();
+            } catch (e) {
+                console.error('[AUTO] 校准失败:', e);
+            }
+        }
+
+        function getCurrentHillCoords() {
+            const currentMode = appState.currentMode;
+            if (currentMode === 'csv' && appState.csv.satelliteData) {
+                const idx = appState.csv.state.currentTimeIdx;
+                if (appState.csv.satelliteData[idx]) {
+                    const satData = appState.csv.satelliteData[idx].sats;
+                    const chief = satData[0];
+                    const cd = { X: chief.X, Y: chief.Y, Z: chief.Z, Vx: chief.Vx, Vy: chief.Vy, Vz: chief.Vz };
+                    const result = [];
+                    for (let i = 0; i < satData.length; i++) {
+                        const s = satData[i];
+                        const h = eciToHill(cd, { X: s.X !== undefined ? s.X : s[8], Y: s.Y !== undefined ? s.Y : s[9], Z: s.Z !== undefined ? s.Z : s[10] });
+                        result.push({ x: h.alongTrack, y: h.crossTrack, idx: i });
+                    }
+                    return result;
+                }
+            } else if (currentMode === 'ws' && appState.ws.lastStepData) {
+                const ws = appState.ws.lastStepData;
+                if (ws.length > 0) {
+                    const cd = { X: ws[0][8], Y: ws[0][9], Z: ws[0][10], Vx: ws[0][11], Vy: ws[0][12], Vz: ws[0][13] };
+                    const result = [];
+                    for (let i = 0; i < ws.length; i++) {
+                        const h = eciToHill(cd, { X: ws[i][8], Y: ws[i][9], Z: ws[i][10] });
+                        result.push({ x: h.alongTrack, y: h.crossTrack, idx: i });
+                    }
+                    return result;
+                }
+            }
+            return null;
+        }
+
+        function getStatus() {
+            if (!intervalId) return 'stopped';
+            if (isPaused) return 'paused';
+            return 'running';
+        }
+
+        function togglePause() {
+            if (isPaused) resume();
+            else pause();
+        }
+
+        start();
+        return { stop, togglePause, getStatus };
+    }
 
     /**
      * 初始化面板
@@ -387,6 +659,31 @@ export function createConstellationPanel(appState) {
         ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2);
         ctx.stroke();
 
+        // 绘制自动跟踪状态
+        if (autoMatcher) {
+            const status = autoMatcher.getStatus();
+            const obs = getCurrentObsAngle();
+            let statusText = '';
+            let statusColor = '#44ff88';
+
+            if (obs && obs.elevation < 0) {
+                statusText = '🔭 地平线下';
+                statusColor = '#888';
+            } else if (status === 'running') {
+                statusText = '🔄 自动跟踪中';
+            } else if (status === 'paused') {
+                statusText = '⏸ 已暂停';
+                statusColor = '#ffaa44';
+            }
+
+            if (statusText) {
+                ctx.fillStyle = statusColor;
+                ctx.font = 'bold 12px Arial';
+                ctx.textAlign = 'left';
+                ctx.fillText(statusText, 8, 18);
+            }
+        }
+
         // 获取当前卫星数据
         const lightMgr = appState.lightManager;
         if (!lightMgr) return;
@@ -606,6 +903,13 @@ export function createConstellationPanel(appState) {
         const mouseX = event.clientX - rect.left;
         const mouseY = event.clientY - rect.top;
 
+        // 点击自动跟踪状态文字切换暂停/恢复
+        if (autoMatcher && mouseX < 100 && mouseY < 26) {
+            autoMatcher.togglePause();
+            render();
+            return;
+        }
+
         for (const sat of satPositions) {
             const dist = Math.sqrt((mouseX - sat.x) ** 2 + (mouseY - sat.y) ** 2);
             if (dist <= 15) {
@@ -715,6 +1019,12 @@ export function createConstellationPanel(appState) {
                     
                     console.log('[PATTERN] 灯光已应用');
                 }
+
+                // 启动自动跟踪
+                if (shapePoints && shapePoints.length > 0) {
+                    if (autoMatcher) autoMatcher.stop();
+                    autoMatcher = createAutoMatcher(shapePoints, transform);
+                }
                 
                 // 重新渲染
                 render();
@@ -732,6 +1042,11 @@ export function createConstellationPanel(appState) {
      * 重置灯光
      */
     function handleResetLights() {
+        if (autoMatcher) {
+            autoMatcher.stop();
+            autoMatcher = null;
+        }
+        transformMatrix = null;
         const lightMgr = appState.lightManager;
         if (!lightMgr) return;
         
@@ -803,5 +1118,6 @@ export function createConstellationPanel(appState) {
         getPanel: () => panel,
         getConfirmBar: () => confirmBar,
         handleLightResponse,
+        getAutoMatcher: () => autoMatcher,
     };
 }

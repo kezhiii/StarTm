@@ -382,29 +382,135 @@ await fetch('/api/light-schedules', {
 
 **文件**：`web/modules/image-processor.js`
 
-**流程**：
+**算法文档**：`docs/matcher-algorithm.md`（含伪代码、数学证明、完整流程）
+
+#### 整体流程
+
 ```
-输入图片 → 二值化 → 提取骨架/轮廓 → 采样 → 匹配卫星 → 点亮
+输入图片 → 二值化(Otsu) → 图案类型检测 → 骨架/轮廓/填充采样 → 
+M⁻¹ 预变形shape → Hill空间匹配(scale+tx+ty) → 反向最近邻点亮
 ```
 
-**核心函数**：
+#### 图案类型检测
+
+```javascript
+// web/modules/image-processor.js
+function detectPatternType(binary, width, height) {
+    // 多层判断逻辑
+    const skeletonRatio = skeletonPixels / foregroundPixels;
+    const contourRatio = contourPixels / foregroundPixels;
+    
+    if (skeletonRatio > 0.20 && contourRatio > 0.35) return 'line';
+    if (contourRatio > 0.50) return 'contour';
+    return 'filled';
+}
+```
+
+#### 核心函数
+
 ```javascript
 // 1. 检测图案类型
 const type = detectPatternType(binary, width, height);
 // 返回: 'line' | 'contour' | 'filled'
 
-// 2. 提取形状点
+// 2. 提取形状点（根据类型选择采样策略）
 const points = extractShapePoints(file, nPoints);
+// 'line': 骨架点FPS, 'contour': 轮廓点FPS, 'filled': 连通域感知采样
 // 返回: [{x, y}, ...]
 
-// 3. 寻找最优变换
-const transform = findBestTransform(shapePoints, satPositions);
-// 返回: {angle, scale, tx, ty, matches}
+// 3. 计算地面视角投影矩阵 M⁻¹
+const matrix = computeHillToGroundMatrix(chiefState, lat, lon, gmst);
+// 返回: {a, b, c, d} — 完整 2×2 逆投影矩阵（含剪切）
 
-// 4. 决定点亮哪些卫星
-const lightMap = decideLighting(matches, satCount, radius);
-// 返回: Map<sat_id, boolean>
+// 4. 预变形：M⁻¹ × shape_IMG → Hill坐标
+const shapeHill = shapeImg.map(p => ({
+    x: a * p.x - b * p.y,
+    y: c * p.x - d * p.y
+}));
+
+// 5. 禁用角度搜索，固定centerAngle=0
+const transform = findBestTransform(shapeHill, hillCoords, {
+    centerAngle: 0,
+    disableAngleSearch: true
+});
+// 返回: {bestScale, bestTx, bestTy, bestCost}
+
+// 6. 反向最近邻点亮
+const lightMap = reverseNearestNeighborLighting(
+    transformedShape, alignedSatellites,
+    radiusThreshold  // = medianSatDist × 0.65
+);
 ```
+
+#### 搜索参数
+
+| 参数 | 值 | 说明 |
+|------|-----|------|
+| 缩放范围 | [0.3, 3.0] | 基于卫星间距自适应 |
+| 平移网格 | 3×3 | 覆盖卫星包围盒±100% |
+| 角度搜索 | 已禁用 | 地面视角补偿时固定θ=0 |
+| Top-K候选 | 10 | 粗搜索后取前10 |
+| 点亮半径 | 中位间距×0.65 | 动态计算，无需配置 |
+
+### 6.5 地面视角补偿（M⁻¹ 投影矩阵）
+
+**文件**：`web/modules/math-utils.js`（`computeHillToGroundMatrix` 函数）
+
+**问题**：观察者从地面观看编队时，Hill坐标系（沿轨S / 法向W）与观察者视线平面（右/上）之间存在投影偏差，包括缩放、旋转和**剪切**变形。
+
+**解决方案**：完整 2×2 逆投影矩阵 M⁻¹
+
+```
+M⁻¹ = [a  b]  其中:
+      [c  d]
+
+a = -(W · right_norm)    // W轴在"右"方向的分量
+b =  (S · right_norm)    // S轴在"右"方向的分量  
+c = -(W · up_norm)       // W轴在"上"方向的分量
+d =  (S · up_norm)       // S轴在"上"方向的分量
+```
+
+**为什么禁用角度搜索？**
+
+```
+dist(rotate(shape, θ), rotate(sats, φ)) 
+  = dist(rotate(shape, θ - φ), sats)
+```
+
+匹配器会自动找到 θ = θ₀ + φ 来抵消任何预旋转。禁用角度搜索（θ=0）并固定 centerAngle=0 保证图案朝向完全由 M⁻¹ 决定。
+
+**为什么变换 shape 点而非卫星？**
+
+M⁻¹ × shape_SW 将形状点从 LOS 空间映射回 Hill 空间，匹配器在原始 Hill 空间搜索卫星。这样观察到的 shape 始终保持正向，不随编队旋转或视角变化。
+
+### 6.6 自动图案重匹配
+
+**文件**：`web/modules/ui/constellation-panel.js`（`createAutoMatcher` 函数）
+
+**功能**：上传图案后自动周期性重匹配，保持灯光图案跟随编队朝向变化。
+
+**两层级联架构**：
+
+```
+tick() → 是否需要全量校准?
+  ├─ 是（角度变化 >5°/2° 或 每10s）→ reMatch() → 完整 findBestTransform
+  └─ 否 → fastMatch() → 应用缓存变换 → 反向最近邻灯光 (<1ms)
+```
+
+- **快速路径**（每 1s tick）：缓存最近一次全量校准的 (scale, tx, ty, radiusThreshold)，直接应用 + 灯光判定，**<1ms**
+- **全量校准**（角度超阈值或每 ~10s）：完整 `findBestTransform` 搜索 + 重新计算半径阈值，**~50ms**
+- **角度监控**：`getCurrentObsAngle()` 实时计算方位角/仰角（基于当前编队主星 ECI 状态 + 观察者经纬度）
+
+**生命周期**：
+- 上传图案 → 自动启动跟踪
+- 关闭编队面板 → 跟踪继续（不会停止）
+- 重置 → 停止跟踪
+- 单击画布状态文字 → 暂停/恢复
+
+**状态指示**：
+- `🔄 自动跟踪中` — 正常运行
+- `⏸ 已暂停` — 用户暂停
+- 无文字 — 未启动或已停止
 
 ### 6.4 编队生成
 
@@ -526,6 +632,28 @@ def atmosphere(altitude):
     pass
 ```
 
+### 7.5 使用自动图案跟踪
+
+**场景**：上传一个图案后，希望灯光自动跟随编队旋转保持图案正向
+
+**步骤1**：进入编队面板
+- 点击界面上的"编队"按钮打开编队面板
+- 选择 CSV 或 WebSocket 模式
+
+**步骤2**：上传图案
+- 在编队面板底部点击"上传图片"
+- 选择带有清晰图案的图片（白底黑图或黑底白图）
+
+**步骤3**：观察自动跟踪
+- 匹配成功后，画布上显示 `🔄 自动跟踪中` 状态
+- 推进时间 → 编队旋转 → 灯光自动更新
+- 控制台可见 `[AUTO] 校准完成`（大约每10s）和 `[AUTO] 快速路径` 日志
+
+**步骤4**：控制跟踪
+- **单击状态文字**：暂停/恢复自动跟踪
+- **关闭编队面板**：跟踪继续（不会停止）
+- **重置**：停止跟踪
+
 ---
 
 ## 8. 故障排除
@@ -572,9 +700,31 @@ pip install -r requirements.txt
 **问题**：上传图片后卫星分布不理想
 
 **解决**：
-1. 调整采样点数（nPoints参数）
-2. 修改点亮半径系数
-3. 检查图片质量和分辨率
+1. 检查图案类型识别：打开控制台查看 `[PROCESS] 图案类型: line/contour/filled`，确认分类正确
+2. 调整点亮半径阈值：默认 `medianSatDist × 0.65`，可在 `image-processor.js:1192` 调整系数
+3. 检查图片质量：白底黑图或黑底白图，线条清晰，分辨率适中（256×256 缩放处理）
+4. 确认采样点数足够：控制台查看 `[PROCESS] 形状点数: N`，N 应至少为卫星数的 1/3
+
+### 8.6 自动跟踪不工作
+
+**问题**：上传图案后灯光不随编队旋转更新
+
+**解决**：
+1. 确认画布上有 `🔄 自动跟踪中` 状态文字
+2. 检查控制台是否有 `[AUTO]` 开头日志
+3. 点击状态文字可暂停/恢复（`⏸ 已暂停` 表示暂停状态）
+4. 确认处于 CSV 或 WebSocket 模式下且已推进时间
+5. 关闭编队面板不会停止跟踪（这是设计行为）
+
+### 8.7 地面视角下图案倾斜
+
+**问题**：切换地面视角后图案变形或倾斜
+
+**解决**：
+1. 确认 `constellation-panel.js` 中匹配器使用 Hill 坐标 `{x: sat.s, y: sat.w}` 而非屏幕坐标
+2. 确认 `processImage` 传递原始 shape 点（M⁻¹ 变换前），面板函数内做 M⁻¹ 变换
+3. 控制台查看 `computeHillToGroundMatrix` 输出的矩阵系数
+4. 确认 `disableAngleSearch: true` 且 `centerAngle: 0`
 
 ---
 
@@ -632,5 +782,5 @@ python gen/gen_orbit.py
 
 ---
 
-**最后更新**：2026-06-11  
+**最后更新**：2026-06-18  
 **维护者**：项目开发团队
