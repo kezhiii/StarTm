@@ -1107,7 +1107,7 @@ export function incrementalMatch(shapePoints, satPositions) {
         satNearestDists.push(minDist);
     }
     satNearestDists.sort((a, b) => a - b);
-    const radiusThreshold = satNearestDists[Math.floor(satNearestDists.length / 2)] * 0.6;
+    const radiusThreshold = satNearestDists[Math.floor(satNearestDists.length / 2)] * 0.3;
 
     const lightMap = reverseNearestNeighborLighting(bestScaled, alignedSat, radiusThreshold);
 
@@ -1189,7 +1189,7 @@ export async function processImage(file, satPositions, satCount, options = {}) {
     // 阈值 = 卫星中位距 × 0.7
     // 这意味着：距离形状点不超过 0.7 倍卫星间距的卫星会被点亮
     // 足够覆盖网格间隙，又不会误点亮远离形状的卫星
-    const radiusThreshold = medianSatDist * 0.6;
+    const radiusThreshold = medianSatDist * 0.3;
     
     console.log(`[PROCESS] 卫星中位距: ${medianSatDist.toFixed(2)}, 点亮半径: ${radiusThreshold.toFixed(2)}`);
     

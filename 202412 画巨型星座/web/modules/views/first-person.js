@@ -260,10 +260,14 @@ export function updateSatellitesFirstPerson(timeIdx, appState) {
         const displayDist = (local.range * SCENE_SCALE) / FORMATION_SCALE;
         const azR = centerAz * DEG + (local.az * DEG - centerAz * DEG) * FORMATION_SCALE;
         const elR = centerEl * DEG + (local.el * DEG - centerEl * DEG) * FORMATION_SCALE;
+
+        // 平面投影：将卫星投影到固定距离的平面上，避免仰角接近天顶时的透视压缩
+        const planeX = displayDist * Math.sin(azR);
+        const planeZ = -displayDist * Math.cos(azR);
         mesh.position.set(
-            displayDist * Math.cos(elR) * Math.sin(azR),
+            planeX,
             displayDist * Math.sin(elR),
-            -displayDist * Math.cos(elR) * Math.cos(azR)
+            planeZ
         );
     }
     
@@ -507,10 +511,14 @@ export function updateSatellitesFirstPersonWs(stepData, appState) {
         const displayDist = (local.range * SCENE_SCALE) / FORMATION_SCALE;
         const azR = centerAz * DEG + (local.az * DEG - centerAz * DEG) * FORMATION_SCALE;
         const elR = centerEl * DEG + (local.el * DEG - centerEl * DEG) * FORMATION_SCALE;
+
+        // 平面投影：将卫星投影到固定距离的平面上，避免仰角接近天顶时的透视压缩
+        const planeX = displayDist * Math.sin(azR);
+        const planeZ = -displayDist * Math.cos(azR);
         mesh.position.set(
-            displayDist * Math.cos(elR) * Math.sin(azR),
+            planeX,
             displayDist * Math.sin(elR),
-            -displayDist * Math.cos(elR) * Math.cos(azR)
+            planeZ
         );
     }
     
