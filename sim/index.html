@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>飞行模拟仿真系统 · 主界面</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; }
+  body { display: flex; height: 100vh; font: 14px/1.5 "Microsoft YaHei", sans-serif; background: #0b1020; color: #cfd8ea; }
+  #stage { flex: 1; border: 0; background: #000; }
+  aside { width: 340px; padding: 14px; background: #111a2e; overflow-y: auto; }
+  h1 { font-size: 16px; margin-bottom: 12px; color: #7fd4ff; }
+  h2 { font-size: 13px; margin: 16px 0 6px; color: #9fb3d1; }
+  .row { display: flex; gap: 8px; margin: 6px 0; }
+  button { flex: 1; padding: 8px 0; background: #1c2a47; color: #cfd8ea; border: 1px solid #33456b; border-radius: 6px; cursor: pointer; }
+  button:hover { background: #25385e; }
+  button.on { background: #145a4a; border-color: #2aa198; }
+  #status { font-size: 12px; color: #8fa3c0; margin-bottom: 8px; }
+  #clock { font: 20px/1.4 Consolas, monospace; color: #7fd4ff; margin: 6px 0; }
+  #stepSlider { width: 100%; }
+  .kv { display: flex; justify-content: space-between; font-size: 12px; color: #8fa3c0; }
+  select { flex: 1; padding: 6px; background: #1c2a47; color: #cfd8ea; border: 1px solid #33456b; border-radius: 6px; }
+</style>
+</head>
+<body>
+<iframe id="stage" src="/web/"></iframe>
+<aside>
+  <h1>飞行模拟仿真系统</h1>
+  <div id="status">等待 StarTM 桥接…</div>
+
+  <h2>接入</h2>
+  <div class="row"><button id="btnAttach">接入外部驱动</button></div>
+
+  <h2>时钟</h2>
+  <div id="clock">--</div>
+  <div class="row">
+    <button id="btnPlay">▶ 播放</button>
+    <button id="btnPause">⏸ 暂停</button>
+  </div>
+  <div class="row">
+    <select id="rate">
+      <option value="1" selected>1×（一秒走一秒）</option>
+      <option value="10">10×</option>
+      <option value="60">60×</option>
+    </select>
+  </div>
+  <input id="stepSlider" type="range" min="0" max="0" value="0">
+  <div class="kv"><span id="kvStep">步 0 / 0</span><span id="kvInterval">步长 -- s</span></div>
+
+  <h2>说明</h2>
+  <div class="kv"><span>三维画面</span><span>StarTM iframe（唯一实例）</span></div>
+  <div class="kv"><span>时钟归属</span><span>本页面</span></div>
+</aside>
+<script type="module" src="./js/main.js"></script>
+</body>
+</html>
