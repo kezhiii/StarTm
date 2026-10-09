@@ -1,5 +1,5 @@
 import { getState, patch } from './store.js';
-import { initPanels, render as renderPanels, selectSat, setSpan, getSelectedSat } from './panels.js';
+import { initPanels, render as renderPanels, selectSat, setSpan, getSelectedSat, markAt } from './panels.js';
 import { setStepSec, getStepSec, loadCategory, getValue } from './loader.js';
 
 const displayCfg = await (await fetch('/sim/config/display.json')).json();
@@ -238,14 +238,13 @@ $('stepSlider').addEventListener('mousemove', (e) => {
     if (!st.attached) return;
     const r = e.target.getBoundingClientRect();
     const sec = (e.clientX - r.left) / r.width * st.totalSteps * st.stepIntervalSec;
-    const band = [...document.querySelectorAll('#tlBands .band')]
-        .find(el => sec >= Number(el.dataset.from) && sec < Number(el.dataset.to));
+    const band = markAt(sec);
     const tip = $('tip');
     tip.style.display = 'block';
     tip.style.left = Math.min(e.clientX + 12, innerWidth - 260) + 'px';
     tip.style.top = (e.clientY - 40) + 'px';
     tip.textContent = `T+${hms(sec)} · ${fmtUtc(bridge.getTimestamp(Math.round(sec / st.stepIntervalSec)))}` +
-                      (band ? ` · ${band.dataset.tip}` : '');
+                      (band ? ` · ${band}` : '');
 });
 $('stepSlider').addEventListener('mouseleave', () => { $('tip').style.display = 'none'; });
 

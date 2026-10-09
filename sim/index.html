@@ -167,6 +167,10 @@
   .tl .bands { position: absolute; left: 0; right: 0; top: 4px; height: 8px; pointer-events: none; }
   .tl .band { position: absolute; top: 0; height: 100%; background: var(--event); opacity: .85; }
   .tl .band.disp { top: 0; background: var(--sel); opacity: .8; }
+  .tl .evs { position: absolute; left: 0; right: 0; top: 0; height: 8px; pointer-events: none; }
+  .tl .ev { position: absolute; top: 1px; width: 6px; height: 6px; margin-left: -3px;
+            background: var(--bad); transform: rotate(45deg); }
+  .legend i.sw.ev { background: var(--bad); width: 7px; height: 7px; transform: rotate(45deg); }
   .tl .ticks { position: absolute; left: 0; right: 0; top: 20px; height: 6px; border-left: 1px solid var(--line-hot); }
   .tl .tick { position: absolute; top: 0; width: 1px; height: 4px; background: var(--line-hot); }
   .tl .ticklab { position: absolute; top: 3px; font: 9.5px var(--num); color: var(--dim); transform: translateX(-50%); }
@@ -267,6 +271,7 @@
     </div>
     <div class="tl">
       <div class="bands" id="tlBands"></div>
+      <div class="evs" id="tlEvents"></div>
       <div class="rail"></div>
       <div class="ticks" id="tlTicks"></div>
       <input id="stepSlider" type="range" min="0" max="0" value="0" step="1" aria-label="仿真时间定位">
@@ -284,6 +289,6 @@
 </footer>
 
 <div id="tip"></div>
-<script type="module" src="./js/main.js?v=22"></script>
+<script type="module" src="./js/main.js?v=24"></script>
 </body>
 </html>

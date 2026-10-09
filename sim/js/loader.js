@@ -17,13 +17,14 @@ export async function loadCategory(name) {
     const txt = await fetchText(`/sim-data/preview/${name}.csv`);
     const lines = txt.split(/\r?\n/).filter(l => l && !l.startsWith('#'));
     const head = lines[0].split(',').map(s => s.trim());
-    const perSat = head.includes('sat_id');
     const rows = lines.slice(1).map(l => {
         const v = l.split(',');
         const o = {};
         head.forEach((h, i) => { o[h] = v[i] !== undefined && v[i] !== '' ? v[i] : null; });
         return o;
     });
+    // 有 sat_id 且是数字星号才算 perSat；事件表的 sat_id 是 TM0S1 这类文本，按历元序列处理
+    const perSat = head.includes('sat_id') && /^\d+$/.test(rows[0]?.sat_id || '');
     // 星号 → 该星的行序（按 rel_s 递增）。星块×历元块与历元主序两种排法都成立。
     const satRows = new Map();
     if (perSat) {

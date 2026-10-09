@@ -26,6 +26,8 @@ let sats = [1, 2, 3];
 let selectedSat = 1;
 let charts = {};
 let spanSec = 0;
+let marks = [];            // 时间标尺上的可解释标记：{from,to,tip}
+let t0ms = 0;              // 数据起点（UTC 毫秒），事件表只有绝对时刻
 let hooks = {};
 
 const key = (file, field) => `${file}.${field}`;
@@ -267,6 +269,24 @@ function runsOf(file, field, cls) {
     return out;
 }
 
+// 事件表按真实时刻单点显示（不插值），换算成相对秒后标在时间轴上
+function eventMarks() {
+    const e = entries.events;
+    if (!e || !t0ms) return [];
+    // 频闪的点亮/熄灭是逐次边沿（1 Hz 下上千条），只进事件表不上时间轴；
+    // 可见区间按当前星过滤，避免同一时刻叠三个标记
+    const skip = cfg.display.timelineEventSkip || [];
+    return e.rows.filter(r => !skip.includes(r.category))
+        .filter(r => r.category !== '可见区间' || r.sat_id === 'TM0S' + selectedSat)
+        .map(r => {
+            const sec = (Date.parse((r.t_actual || '').replace(' ', 'T') + 'Z') - t0ms) / 1000;
+            if (!Number.isFinite(sec) || sec < 0 || sec > spanSec) return null;
+            const w = Math.max((Number(r.duration_s) || 0) / spanSec * 100, .35);
+            return { from: sec, to: sec + (Number(r.duration_s) || 0),
+                     tip: `事件「${r.category}」${r.sat_id} T+${hms(sec)}${r.reason ? '（' + r.reason + '）' : ''}` };
+        }).filter(Boolean);
+}
+
 function paintWindows() {
     const host = $('tlBands');
     if (!host || !spanSec) return;
@@ -278,9 +298,26 @@ function paintWindows() {
         return `<div class="band${r.cls}" style="left:${left}%;width:${width}%" ` +
                `data-tip="${label}" data-from="${r.from}" data-to="${r.to}"></div>`;
     }).join('');
+    marks = [...runs.map(r => ({ from: r.from, to: r.to,
+              tip: (r.cls === 'disp' ? '有效显示 ' : '共同可见 ') + `T+${hms(r.from)} → T+${hms(r.to)}（${Math.round(r.to - r.from)} s）` })),
+             ...eventMarks()];
+    const ev = $('tlEvents');
+    if (ev) ev.innerHTML = eventMarks().map(m =>
+        `<div class="ev" style="left:${m.from / spanSec * 100}%" title="${m.tip}"></div>`).join('');
     const legend = $('bandLegend');
-    if (legend) legend.innerHTML = [...new Set(runs.map(r => r.cls))].map(c =>
-        c === 'disp' ? '<span><i class="sw disp"></i>有效显示窗口</span>' : '<span><i class="sw"></i>共同可见窗口</span>').join('');
+    if (legend) {
+        const kinds = [...new Set(runs.map(r => r.cls))];
+        legend.innerHTML = kinds.map(c =>
+            c === 'disp' ? '<span><i class="sw disp"></i>有效显示窗口</span>' : '<span><i class="sw"></i>共同可见窗口</span>').join('')
+            + (eventMarks().length ? '<span><i class="sw ev"></i>事件（点选定位）</span>' : '');
+    }
+}
+
+// 时间轴上某一刻的可解释标记（窗口或事件），供悬停提示使用
+export function markAt(sec) {
+    const tol = spanSec * 0.004;
+    const hit = marks.find(m => sec >= m.from - tol && sec <= Math.max(m.to, m.from) + tol);
+    return hit ? hit.tip : '';
 }
 
 function paintTicks() {
@@ -327,7 +364,7 @@ export async function initPanels(displayJson, h) {
     const files = new Set();
     cfg.groups.forEach(g => g.rows.forEach(r => files.add(r.file)));
     (displayJson.charts || []).forEach(c => files.add(c.file));
-    ['ground_obs', 'display'].forEach(f => files.add(f));
+    ['ground_obs', 'display', 'events', 'time_ident'].forEach(f => files.add(f));
     for (const f of files) {
         try { entries[f] = await loadCategory(f); } catch (e) { missing.add(f); }
     }
@@ -340,6 +377,7 @@ export async function initPanels(displayJson, h) {
             if (Number.isFinite(v)) nominal[`${spec.file}.${s.field}`] = v * (spec.scale || 1);
         }
     }
+    t0ms = Date.parse((entries.time_ident?.rows[0]?.utcg || '').replace(' ', 'T') + 'Z') || 0;
     buildTargets();
     buildCharts();
     if (missing.size) hooks.onMissing([...missing]);

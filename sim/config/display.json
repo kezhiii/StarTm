@@ -79,5 +79,9 @@
     "formation_geom.drift_T",
     "formation_geom.drift_N"
   ],
-  "notComputedNote": "effective/incone 取决于显示载荷真实指向；drift_* 因参考中心逐秒列未交付、当前用三星几何中心代替，恒为 0"
+  "notComputedNote": "effective/incone 取决于显示载荷真实指向；drift_* 因参考中心逐秒列未交付、当前用三星几何中心代替，恒为 0",
+  "timelineEventSkip": [
+    "点亮",
+    "熄灭"
+  ]
 }

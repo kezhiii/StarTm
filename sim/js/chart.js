@@ -65,7 +65,7 @@ export function createChart(canvas, { fmtY = v => Math.round(v * 10) / 10, onPic
             ctx.beginPath(); ctx.moveTo(box.L, yy); ctx.lineTo(box.R, yy); ctx.stroke();
             ctx.setLineDash([]);
         }
-        // 曲线
+        // 曲线；落在允许带外的点标红，异常点不必再看表
         series.forEach(s => {
             if (!s.data.length) return;
             ctx.strokeStyle = s.color; ctx.lineWidth = s.dash ? 1 : 1.6;
@@ -74,6 +74,13 @@ export function createChart(canvas, { fmtY = v => Math.round(v * 10) / 10, onPic
             s.data.forEach((p, i) => { const X = px(p.x), Y = py(p.y); i ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y); });
             ctx.stroke();
             ctx.setLineDash([]);
+            if (opts.band) {
+                ctx.fillStyle = '#d8604b';
+                s.data.forEach(p => {
+                    if (p.y >= opts.band.lo && p.y <= opts.band.hi) return;
+                    ctx.beginPath(); ctx.arc(px(p.x), py(p.y), 2.2, 0, Math.PI * 2); ctx.fill();
+                });
+            }
         });
         // 当前时刻游标
         if (opts.cursor != null && opts.cursor >= box.x0 && opts.cursor <= box.x1) {
