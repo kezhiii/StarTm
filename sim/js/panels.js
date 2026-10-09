@@ -104,14 +104,15 @@ function updateTiles(simSeconds) {
     }
 }
 
-// 时间标尺背后的可见/显示窗口带：把连续区间合并成段，按选星呈现
-export function paintWindows(spanSec) {
+// 时间标尺背后的窗口带：共同可见（ground_obs.common_vis）与有效显示（display.effective），
+// 连续区间合并成段，按选星呈现
+function paintWindows(spanSec) {
     const host = $('tlBands');
-    if (!host || !entries.ground_obs || !spanSec) return;
-    const e = entries.ground_obs;
+    if (!host || !spanSec) return;
     const stepSec = getStepSec();
     const runs = [];
-    for (const [field, cls] of [['common_vis', ''], ['incone', 'disp']]) {
+    for (const [e, field, cls] of [[entries.ground_obs, 'common_vis', ''], [entries.display, 'effective', 'disp']]) {
+        if (!e) continue;
         let start = null;
         for (let ep = 0; ep <= e.nEpoch; ep++) {
             const on = ep < e.nEpoch && Number(getValue(e, ep, selectedSat, field)) === 1;
@@ -126,7 +127,7 @@ export function paintWindows(spanSec) {
         `<div class="band${r.cls}" style="left:${r.left}%;width:${Math.max(r.width, .25)}%"></div>`).join('');
 }
 
-export function paintTicks(spanSec) {
+function paintTicks(spanSec) {
     const host = $('tlTicks');
     if (!host || !spanSec) return;
     const raw = spanSec / 8;
