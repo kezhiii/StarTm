@@ -64,10 +64,10 @@ export function createState() {
             lastStepData: null
         },
         
-        // 用户交互状态
+        // 用户交互状态（默认站址：合肥 31.8206°N 117.2272°E，与任务地面站一致）
         interaction: {
-            currentLat: -15,
-            currentLon: -125,
+            currentLat: 31.8206,
+            currentLon: 117.2272,
             isViewLocked: true,
             centerDragging: false,
             centerLastMouse: { x: 0, y: 0 },

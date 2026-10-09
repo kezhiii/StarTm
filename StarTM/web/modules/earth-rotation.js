@@ -15,6 +15,45 @@ export function latLonToSurface3D(lat, lon) {
     );
 }
 
+const UP = new THREE.Vector3(0, 1, 0);
+
+/**
+ * 地面站标记：贴地圆环 +  outward 光柱，总览比例下仍能认出站点位置
+ */
+export function buildGroundStationMarker() {
+    const accent = 0xf2a33c;
+    const g = new THREE.Group();
+
+    const dot = new THREE.Mesh(new THREE.SphereGeometry(0.55, 12, 8), new THREE.MeshBasicMaterial({ color: accent }));
+    g.add(dot);
+
+    const beam = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.06, 0.35, 7, 10, 1, true),
+        new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.4, side: THREE.DoubleSide, depthWrite: false })
+    );
+    beam.position.y = 3.8;
+    g.add(beam);
+
+    const ring = new THREE.Mesh(
+        new THREE.RingGeometry(1.6, 1.95, 40),
+        new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.65, side: THREE.DoubleSide, depthWrite: false })
+    );
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.12;
+    g.add(ring);
+
+    return g;
+}
+
+/**
+ * 放置地面站标记：位置随地球自转，光柱沿当地天顶方向
+ */
+export function placeGroundStationMarker(marker, lat, lon, gmst) {
+    const surface = latLonToSurface3D(lat, lon);
+    marker.position.copy(surface.clone().applyAxisAngle(UP, gmst));
+    marker.quaternion.setFromUnitVectors(UP, surface.clone().normalize().applyAxisAngle(UP, gmst));
+}
+
 /**
  * 更新地球自转（连续插值）
  */
@@ -38,9 +77,7 @@ export function updateEarthRotation(appState, sceneObjects) {
     
     // 更新地面站标记位置，使其随地球一起旋转
     if (sceneObjects.groundStationMarker3D && sceneObjects.earth && sceneObjects.earth.parent) {
-        const gsPos = latLonToSurface3D(interaction.currentLat, interaction.currentLon);
-        gsPos.applyAxisAngle(new THREE.Vector3(0, 1, 0), gmst);
-        sceneObjects.groundStationMarker3D.position.copy(gsPos);
+        placeGroundStationMarker(sceneObjects.groundStationMarker3D, interaction.currentLat, interaction.currentLon, gmst);
     }
 }
 

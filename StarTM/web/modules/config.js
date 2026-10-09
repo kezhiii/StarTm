@@ -6,6 +6,8 @@ export const RE_KM = 6378.137;
 export const RE_3D = 50;
 export const SAT_SCALE = RE_3D / RE_KM;
 export const SAT_SCALE_CENTER = 1;
+// 第三视角中真实尺寸（≈2 m / 6378 km）不可分辨，按可读尺度放大约 4 倍
+export const SAT_VISUAL_SCALE = 4;
 
 // 相机位置常量
 export const THIRD_PERSON_CAMERA_POS = new THREE.Vector3(RE_3D * 3, RE_3D * 1.5, RE_3D * 3);
@@ -31,14 +33,11 @@ let _sharedResources = null;
 export function getSharedResources() {
     if (!_sharedResources) {
         _sharedResources = {
-            // 卫星相关
-            SAT_GEOM_3RD: new THREE.SphereGeometry(0.5, 16, 16),
+            // 卫星相关（第三/主星视角的模型由 sat-model 组装，这里只提供材质模板）
             SAT_MAT_3RD: new THREE.MeshPhongMaterial({ color: 0x00ff00 }),
             SAT_GEOM_1ST: new THREE.SphereGeometry(0.002, 8, 8),
             SAT_MAT_1ST: new THREE.MeshPhongMaterial({ color: 0x00ff00 }),
-            CENTER_SAT_GEOM: new THREE.SphereGeometry(0.1, 16, 16),
             CENTER_SAT_MAT: new THREE.MeshPhongMaterial({ color: 0xffff00 }),
-            DEPUTY_SAT_GEOM: new THREE.SphereGeometry(0.1, 8, 8),
             DEPUTY_SAT_MAT: new THREE.MeshPhongMaterial({ color: 0x00ff88 }),
 
             // 轨道环
@@ -46,10 +45,8 @@ export function getSharedResources() {
 
             // 地球相关
             EARTH_GEOM_3RD: new THREE.SphereGeometry(RE_3D, 64, 32),
-            EARTH_WIRE_MAT: new THREE.LineBasicMaterial({ color: 0x4488cc, transparent: true, opacity: 0.15 }),
+            EARTH_WIRE_MAT: new THREE.LineBasicMaterial({ color: 0x4488cc, transparent: true, opacity: 0.07 }),
             EARTH_CENTER_GEOM: new THREE.SphereGeometry(RE_KM, 64, 32),
-            GS_MARKER_GEOM: new THREE.SphereGeometry(1.2, 16, 16),
-            GS_MARKER_MAT: new THREE.MeshBasicMaterial({ color: 0xffff00 }),
             GS_MARKER_1ST_GEOM: new THREE.SphereGeometry(8, 16, 16),
             GS_MARKER_1ST_MAT: new THREE.MeshBasicMaterial({ color: 0xffff00 }),
 

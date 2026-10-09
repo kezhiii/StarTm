@@ -2,9 +2,9 @@
 import * as THREE from 'three';
 import { DEG, SAT_SCALE_CENTER, MAX_PAN_DISTANCE, sharedResources } from '../config.js';
 import { parseTimestamp, dateToJD, calcGMST, formatTimestamp } from '../math-utils.js';
-import { buildSatelliteMesh } from '../sat-model.js';
+import { buildSatelliteMesh, buildSatLabel } from '../sat-model.js';
 
-const { EARTH_CENTER_GEOM, CENTER_SAT_GEOM, CENTER_SAT_MAT, DEPUTY_SAT_GEOM, DEPUTY_SAT_MAT } = sharedResources;
+const { EARTH_CENTER_GEOM, CENTER_SAT_MAT, DEPUTY_SAT_MAT } = sharedResources;
 
 /**
  * 更新主星视角相机位置
@@ -78,16 +78,24 @@ export function initCenterPersonScene(scene, controls, appState) {
     sceneObjects.earthRef.position.set(0, 0, 0);
     scene.add(sceneObjects.earthRef);
 
-    sceneObjects.centerSatMarker = new THREE.Mesh(CENTER_SAT_GEOM, CENTER_SAT_MAT);
+    // CSV/编队数据：跟随星与从星都按数据里的星数建；此视角 1 单位 = 1 km，
+    // 模型不缩小就会互相压住，故取 0.25（≈2.5 m 观感）
+    const csvSats = (appState.currentMode === 'csv' && csv.satelliteData.length)
+        ? csv.satelliteData[0].sats : null;
+    const satCount = csvSats ? csvSats.length : (appState.config?.satCount || 0);
+    const modelScale = csvSats ? 0.25 : 1;
+
+    sceneObjects.centerSatMarker = buildSatelliteMesh(CENTER_SAT_MAT.clone());
+    sceneObjects.centerSatMarker.scale.setScalar(modelScale);
+    if (csvSats) sceneObjects.centerSatMarker.add(buildSatLabel(`TM0S${csvSats[0].sat_id}`, { scale: 3.2, offset: 9 }));
     scene.add(sceneObjects.centerSatMarker);
 
     sceneObjects.satelliteMeshesCenter = [];
-    const satCount = appState.config?.satCount || 0;
-    const deputyCount = satCount > 0 ? satCount - 1 : 0; // 从星数 = 总数 - 主星
-    for (let i = 0; i < deputyCount; i++) {
-        // 修复：克隆材质，使每颗卫星的颜色独立；模型换为箱体+双翼（姿态可视化需要）
+    for (let i = 1; i < satCount; i++) {
         const mesh = buildSatelliteMesh(DEPUTY_SAT_MAT.clone());
-        mesh.userData.satIdx = i + 1;
+        mesh.scale.setScalar(modelScale);
+        mesh.userData.satIdx = i;
+        if (csvSats) mesh.add(buildSatLabel(`TM0S${csvSats[i].sat_id}`, { scale: 3.2, offset: 9 }));
         mesh.visible = false;
         scene.add(mesh);
         sceneObjects.satelliteMeshesCenter.push(mesh);

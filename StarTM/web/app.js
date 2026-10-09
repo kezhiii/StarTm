@@ -115,8 +115,8 @@ function initBaseScene() {
 }
 
 // ======================== 视角切换 ========================
-function switchView(view) {
-    if (view === appState.currentView) return;
+function switchView(view, force) {
+    if (view === appState.currentView && !force) return;
     log.debug(`切换到: ${view}, 模式: ${appState.currentMode}, 当前帧索引: ${csvState.currentTimeIdx}`);
 
     // 0. 更新状态和 UI (最先执行，防止后续 return 跳过)
@@ -144,22 +144,14 @@ function switchView(view) {
     // 2. 清理场景对象
     clearSceneObjects(appCtx.scene, appCtx.camera, appState);
 
-    // 3. 修复光照
-    appCtx.scene.traverse(obj => {
-        if (obj.isDirectionalLight) {
-            const dist = (view === 'center') ? 10000 : 100;
-            obj.position.set(dist, 50, dist);
-        }
-    });
-
-    // 4. 数据索引校验 (防止越界导致不渲染)
+    // 3. 数据索引校验 (防止越界导致不渲染)
     if (appState.currentMode === 'csv' && appState.csv.satelliteData && appState.csv.satelliteData.length > 0) {
         if (csvState.currentTimeIdx < 0 || csvState.currentTimeIdx >= appState.csv.satelliteData.length) {
             csvState.currentTimeIdx = 0;
         }
     }
 
-    // 5. 初始化新场景并立即渲染当前帧
+    // 4. 初始化新场景并立即渲染当前帧
     if (view === 'third') {
         initThirdPersonSceneMod(appCtx.scene, appCtx.controls, appState);
         appCtx.controls.enabled = true;

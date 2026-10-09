@@ -127,6 +127,12 @@ export function createModeManager(appState, viewManager, playbackHandlers) {
         switchToCsv,
         switchToWs,
         onWsConnected: () => {
+            // 外部驱动（飞行模拟仿真系统接管时钟）时，WS 生命周期不改写模式，
+            // 否则重连回调会把画面切回星座网格数
+            if (appState.csv.state.externalMode) {
+                console.log('[MODE-MGR] 外部驱动中，WS 连接不改写模式');
+                return;
+            }
             appState.currentMode = 'ws';
             console.log('[MODE-MGR] WS 连接成功');
         },

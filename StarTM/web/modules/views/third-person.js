@@ -1,16 +1,28 @@
 // ======================== 第三视角模块 ========================
 import * as THREE from 'three';
-import { DEG, RE_3D, SAT_SCALE, sharedResources } from '../config.js';
-import { formatTimestamp } from '../math-utils.js';
+import { DEG, RE_3D, SAT_SCALE, SAT_VISUAL_SCALE, sharedResources } from '../config.js';
+import { formatTimestamp, parseTimestamp, dateToJD, calcGMST } from '../math-utils.js';
 import { initMoon } from '../moon-orbit.js';
-import { buildSatelliteMesh } from '../sat-model.js';
+import { buildSatelliteMesh, buildSatLabel, buildTextSprite } from '../sat-model.js';
+import { buildGroundStationMarker, placeGroundStationMarker } from '../earth-rotation.js';
 import { clearSceneObjects } from '../../core/scene-utils.js';
 import { createLogger } from '../../core/logger.js';
 
-const { EARTH_GEOM_3RD, EARTH_WIRE_MAT, GS_MARKER_GEOM, GS_MARKER_MAT,
-        SAT_GEOM_3RD, SAT_MAT_3RD, ORBIT_RING_MAT } = sharedResources;
+const { EARTH_GEOM_3RD, EARTH_WIRE_MAT,
+        SAT_MAT_3RD, ORBIT_RING_MAT } = sharedResources;
 
 const log = createLogger('THIRD-PERSON');
+
+/**
+ * 当前帧对应的 GMST（无数据时为 0）
+ */
+function currentGmst(appState) {
+    const ts = appState.csv.satelliteData[appState.csv.state.currentTimeIdx]?.timestamp
+        || appState.ws.lastStepData?.[0]?.[0];
+    if (!ts) return 0;
+    const d = parseTimestamp(ts);
+    return calcGMST(dateToJD(d.year, d.month, d.day, d.hour, d.minute, d.second));
+}
 
 /**
  * 创建轨道环
@@ -32,14 +44,6 @@ export function createOrbitRing(a, e, i, OMG, omg) {
         points.push(new THREE.Vector3(x * SAT_SCALE, z * SAT_SCALE, -y * SAT_SCALE));
     }
     return new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), ORBIT_RING_MAT);
-}
-
-/**
- * 经纬度转 3D 表面坐标
- */
-function latLonToSurface3D(lat, lon) {
-    const latR = lat * DEG, lonR = lon * DEG;
-    return new THREE.Vector3(RE_3D * Math.cos(latR) * Math.cos(lonR), RE_3D * Math.sin(latR), -RE_3D * Math.cos(latR) * Math.sin(lonR));
 }
 
 /**
@@ -70,19 +74,36 @@ export function initThirdPersonScene(scene, controls, appState) {
     sceneObjects.earthGroup = new THREE.Group();
     sceneObjects.earthGroup.add(sceneObjects.earth);
     sceneObjects.earth.add(new THREE.LineSegments(new THREE.WireframeGeometry(EARTH_GEOM_3RD), EARTH_WIRE_MAT));
+    // 大气边缘光：夜面也能读出地球轮廓，不至于糊成一块黑
+    sceneObjects.earthGroup.add(new THREE.Mesh(
+        new THREE.SphereGeometry(RE_3D * 1.04, 48, 24),
+        new THREE.MeshBasicMaterial({
+            color: 0x3f7fbf, transparent: true, opacity: 0.22,
+            side: THREE.BackSide, blending: THREE.AdditiveBlending, depthWrite: false,
+        })
+    ));
     scene.add(sceneObjects.earthGroup);
 
-    // 地面站标记
-    sceneObjects.groundStationMarker3D = new THREE.Mesh(GS_MARKER_GEOM, GS_MARKER_MAT);
+    // 地面站标记（贴地环 + 天顶光柱 + 站名），位置随地球自转
+    sceneObjects.groundStationMarker3D = buildGroundStationMarker();
+    const gsLabel = buildTextSprite('地面站', { scale: 13, color: 'rgba(242, 163, 60, 0.9)' });
+    gsLabel.position.y = 9;
+    sceneObjects.groundStationMarker3D.add(gsLabel);
     sceneObjects.earthGroup.add(sceneObjects.groundStationMarker3D);
+    placeGroundStationMarker(sceneObjects.groundStationMarker3D, appState.interaction.currentLat, appState.interaction.currentLon, currentGmst(appState));
 
-    // 卫星网格 (从配置获取数量)
-    const satCount = appState.config?.satCount || 0;
+    // 卫星网格：CSV/外部驱动按数据里的星数建，WS 模式按后端星座数
+    const csvSats = (appState.currentMode === 'csv' && csv.satelliteData.length)
+        ? csv.satelliteData[0].sats : null;
+    const satCount = csvSats ? csvSats.length : (appState.config?.satCount || 0);
     sceneObjects.satelliteMeshes3D = [];
     for (let i = 0; i < satCount; i++) {
-        // 修复：克隆材质，使每颗卫星的颜色独立；模型换为箱体+双翼（姿态可视化需要）
+        // 克隆材质使每颗星的着色独立；真实尺寸在此比例下不可见，按可读尺度放大
         const mesh = buildSatelliteMesh(SAT_MAT_3RD.clone());
+        mesh.scale.setScalar(SAT_VISUAL_SCALE);
         mesh.userData.satIdx = i;
+        // 编队间距 1 km，在此比例下三星重合为一点，只给一个组标签
+        if (csvSats && i === 0) mesh.add(buildSatLabel('编队 TM0S1-3', { scale: 4, offset: 3.4 }));
         mesh.visible = false;
         scene.add(mesh);
         sceneObjects.satelliteMeshes3D.push(mesh);

@@ -1,7 +1,7 @@
 // ======================== 播放管理器 ========================
 import * as THREE from 'three';
 import { parseTimestamp, dateToJD, formatTimestamp, calcGMST } from '../modules/math-utils.js';
-import { latLonToSurface3D } from '../modules/earth-rotation.js';
+import { placeGroundStationMarker } from '../modules/earth-rotation.js';
 import { interpolateSatellites, updateSatellitesThirdPersonInterp, updateSatellitesFirstPersonInterp, updateSatellitesCenterPersonInterp } from '../modules/interpolation.js';
 import { sendWsCommand as sendWsCmd, updateWsStatus as updateWsSts } from '../core/ws-utils.js';
 import { updateSatellitesThirdPersonWs } from '../modules/views/third-person.js';
@@ -28,6 +28,19 @@ let csvPlaybackState = {
 };
 
 /**
+ * 帧间隔（秒）：取前两个时间戳之差并四舍五入。儒略日浮点差会带出 59.9999 这类尾数，
+ * 外部驱动用它做 epoch 映射时必须拿到整秒。
+ */
+function frameInterval(times) {
+    if (!times || times.length < 2) return 60;
+    const d1 = parseTimestamp(times[0]);
+    const d2 = parseTimestamp(times[1]);
+    const sec = Math.abs(dateToJD(d2.year, d2.month, d2.day, d2.hour, d2.minute, d2.second) -
+                         dateToJD(d1.year, d1.month, d1.day, d1.hour, d1.minute, d1.second)) * 86400;
+    return Math.max(1, Math.round(sec));
+}
+
+/**
  * 创建播放管理器
  */
 // Added cameraPanOffset parameter
@@ -51,25 +64,26 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
         const i = csvState.currentTimeIdx;
         const per = attitudeTable[i];
         if (!per) return;
-        let meshes = null; let base = 1; // 网格下标 ↔ 星号：third 从 0 计、center 从 1 计，数据 sat_id 从 1 起
+        const so = appState.sceneObjects;
+        let targets = [];
         if (appState.currentView === 'third') {
-            meshes = appState.sceneObjects.satelliteMeshes3D;
+            targets = (so.satelliteMeshes3D || []).map((obj, i) => ({ obj, satId: i + 1 }));
         } else if (appState.currentView === 'center') {
-            meshes = appState.sceneObjects.satelliteMeshesCenter;
+            // 主星视角里被跟随的那颗是独立标记，不在从星数组内
+            if (so.centerSatMarker) targets.push({ obj: so.centerSatMarker, satId: 1 });
+            targets = targets.concat((so.satelliteMeshesCenter || []).map((obj, i) => ({ obj, satId: i + 2 })));
         } else {
             return;
         }
-        if (!meshes) return;
-        for (let m = 0; m < meshes.length; m++) {
-            const mesh = meshes[m];
-            if (!mesh || !mesh.visible) continue;
-            const q = per[m + base];
+        for (const { obj, satId } of targets) {
+            if (!obj || !obj.visible) continue;
+            const q = per[satId];
             if (!q) continue;
             const cx = -QP_C * q[0] - QP_S * q[3];
             const cy = -QP_C * q[1] - QP_S * q[2];
             const cz = -QP_C * q[2] + QP_S * q[1];
             const cw = QP_C * q[3] - QP_S * q[0];
-            mesh.quaternion.set(cx, cy, cz, cw);
+            obj.quaternion.set(cx, cy, cz, cw);
             attApplied += 1;
         }
     }
@@ -88,13 +102,7 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
         }
         csvState.isPlaying = true;
 
-        let frameIntervalSec = 60;
-        if (times.length >= 2) {
-            const d1 = parseTimestamp(times[0]);
-            const d2 = parseTimestamp(times[1]);
-            frameIntervalSec = Math.abs((dateToJD(d2.year, d2.month, d2.day, d2.hour, d2.minute, d2.second) -
-                                          dateToJD(d1.year, d1.month, d1.day, d1.hour, d1.minute, d1.second)) * 86400);
-        }
+        let frameIntervalSec = frameInterval(times);
 
         const speedEl = document.getElementById('speed');
         const intervalMs = intervalMsOverride || (speedEl ? parseInt(speedEl.value, 10) : 1000 / 30);
@@ -300,13 +308,7 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
 
         // 设置基准时间为新时间戳
         const times = appState.csv.timeIndices;
-        let frameIntervalSec = 60;
-        if (times.length >= 2) {
-            const d1 = parseTimestamp(times[0]);
-            const d2 = parseTimestamp(times[1]);
-            frameIntervalSec = Math.abs((dateToJD(d2.year, d2.month, d2.day, d2.hour, d2.minute, d2.second) -
-                                          dateToJD(d1.year, d1.month, d1.day, d1.hour, d1.minute, d1.second)) * 86400);
-        }
+        let frameIntervalSec = frameInterval(times);
         const speedEl = document.getElementById('speed');
         const intervalMs = speedEl ? parseInt(speedEl.value, 10) : 1000 / 30;
         const framesPerSec = 1000 / intervalMs;
@@ -337,9 +339,7 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
                 sceneObjects.earthRef.rotation.y = gmst;
             }
             if (sceneObjects.groundStationMarker3D && sceneObjects.earth && sceneObjects.earth.parent) {
-                const gsPos = latLonToSurface3D(interaction.currentLat, interaction.currentLon);
-                gsPos.applyAxisAngle(new THREE.Vector3(0, 1, 0), gmst);
-                sceneObjects.groundStationMarker3D.position.copy(gsPos);
+                placeGroundStationMarker(sceneObjects.groundStationMarker3D, interaction.currentLat, interaction.currentLon, gmst);
             }
             
             // 关键修复：暂停状态下拖动时间轴，更新 pausedStartJD
@@ -781,6 +781,8 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
                 }
 
                 if (msg.type === 'data' && Array.isArray(msg.data) && msg.data.length > 0) {
+                    // 外部驱动接管时，WS 推送不得改写网格位置与可见性（否则会把回放画面顶掉）
+                    if (csvState.externalMode) return;
                     const isValid = msg.data.every(d => Array.isArray(d) && d.length >= 14);
                     if (!isValid) { DBG.warn('格式错误'); return; }
 
@@ -960,13 +962,7 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
         // 更新速度因子
         const data = appState.csv.satelliteData;
         const times = appState.csv.timeIndices;
-        let frameIntervalSec = 60;
-        if (times.length >= 2) {
-            const d1 = parseTimestamp(times[0]);
-            const d2 = parseTimestamp(times[1]);
-            frameIntervalSec = Math.abs((dateToJD(d2.year, d2.month, d2.day, d2.hour, d2.minute, d2.second) -
-                                          dateToJD(d1.year, d1.month, d1.day, d1.hour, d1.minute, d1.second)) * 86400);
-        }
+        let frameIntervalSec = frameInterval(times);
         const framesPerSec = 1000 / newIntervalMs;
         const newSpeedFactor = framesPerSec * frameIntervalSec;
         const oldSpeedFactor = earthRotationState.speedFactor;
@@ -1076,24 +1072,57 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
             csvState.externalMode = want;
             if (want) {
                 if (csvState.isPlaying) stopCsvPlayback();
+                if (wsState.playbackActive) stopWsPlayback();   // 时钟交给外部页面，WS 播放循环必须停
                 startCsvPlayback(false); // 只渲染不自行推进
             }
         },
         totalSteps: () => (appState.csv.timeIndices || []).length,
+        mode: () => appState.currentMode,
         getStep: () => csvState.currentTimeIdx,
         getStepIntervalSec: () => csvPlaybackState.frameIntervalSec || 1,
         getTimestamp: (i) => (appState.csv.timeIndices || [])[i] || null,
         setAttitudeTable: (t) => { attitudeTable = t; },
         hasAttitude: () => !!attitudeTable,
+        setSunJ2000(x, y, z) {
+            // J2000 太阳单位向量 → 场景坐标 (X, Z, −Y)；平行光以地心为靶点
+            const l = scene && scene.userData.sunLight;
+            if (!l) return false;
+            const n = Math.hypot(x, y, z) || 1;
+            l.position.set(400 * x / n, 400 * z / n, -400 * y / n);
+            return true;
+        },
+        setStation(lat, lon) {
+            appState.interaction.currentLat = lat;
+            appState.interaction.currentLon = lon;
+            const a = document.getElementById('lat'), b = document.getElementById('lon');
+            if (a) a.value = lat;
+            if (b) b.value = lon;
+        },
+        setLight(satIdx, on) {
+            if (!appState.lightManager) return false;
+            appState.lightManager.setLight(satIdx, !!on);
+            return true;
+        },
         __probe: () => {
             const meshes = appState.currentView === 'third'
                 ? appState.sceneObjects.satelliteMeshes3D
                 : appState.sceneObjects.satelliteMeshesCenter;
+            const sun = scene && scene.userData.sunLight;
+            const gs = appState.sceneObjects.groundStationMarker3D;
+            const r3 = (a) => a.map(v => +v.toFixed(1));
             return {
                 view: appState.currentView,
                 attApplied, loopTicks,
                 playing: csvState.isPlaying,
-                meshes: (meshes || []).map(m => ({ satIdx: m.userData.satIdx, vis: m.visible, q: m.quaternion.toArray(), p: m.position.toArray() })),
+                sun: sun ? r3(sun.position.toArray()) : null,
+                station: gs ? r3(gs.position.toArray()) : null,
+                stationLL: [+appState.interaction.currentLat.toFixed(4), +appState.interaction.currentLon.toFixed(4)],
+                satCount: (appState.config || {}).satCount,
+                lights: appState.lightManager
+                    ? [...appState.lightManager.getAllStates().entries()].filter(([, s]) => s.isOn).map(([i]) => i)
+                    : null,
+                meshes: (meshes || []).map(m => ({ satIdx: m.userData.satIdx, vis: m.visible, scale: m.scale.x,
+                    q: m.quaternion.toArray().map(v => +v.toFixed(3)), p: r3(m.position.toArray()) })),
             };
         },
         setStep(i) {
@@ -1128,12 +1157,8 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
             const b = document.getElementById('modeToggle');
             if (b) b.click();
         },
-        rebuildView() {
-            // 切 CSV 后网格仍是 WS 星座的旧构建，强制按当前数据重建视角
-            const btns = [...document.querySelectorAll('button,div,span')]
-                .filter(x => x.children.length === 0 && /轨道/.test(x.textContent));
-            if (btns[0]) btns[0].click();
-        }
+        rebuildView() { viewManager.switchView(appState.currentView, true); },
+        setView(v) { viewManager.switchView(v); return appState.currentView; }
     };
 
     return {

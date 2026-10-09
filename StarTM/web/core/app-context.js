@@ -51,11 +51,12 @@ export function createAppContext() {
             renderer.setSize(window.innerWidth, window.innerHeight);
             container.appendChild(renderer.domElement);
             
-            // 基础光照
-            scene.add(new THREE.AmbientLight(0x333344, 0.6));
-            const sun = new THREE.DirectionalLight(0xffffff, 1.2);
-            sun.position.set(100, 50, 100);
+            // 基础光照：环境光抬到夜面可辨轮廓，平行光方向由 __simbridge.setSunJ2000 按星历驱动
+            scene.add(new THREE.AmbientLight(0x3a4d63, 0.75));
+            const sun = new THREE.DirectionalLight(0xfff4e0, 1.5);
+            sun.position.set(400, 0, 0);
             scene.add(sun);
+            scene.userData.sunLight = sun;
             
             // 控制器
             controls = new OrbitControls(camera, renderer.domElement);

@@ -152,36 +152,37 @@ export function createLightManager(getSceneObjectsFn) {
             }
 
             const mesh = meshes[satIdx];
-            
+
             // 关键修复：检查网格是否仍然有效，防止视角切换时操作已销毁的网格
-            if (!mesh.material || mesh.material.disposed || !mesh.parent) {
+            if (!mesh || !mesh.parent) {
                 return;
             }
-            
+
+            // 组合模型（箱体+翼+发光面）本体材质在子网格上；球体模型直接用自身材质
+            const body = mesh.userData?.body || mesh;
+            const face = mesh.userData?.face;
+            if (!body.material || body.material.disposed) {
+                return;
+            }
+
             const isVisible = mesh.visible;
 
             if (isOn) {
-                // 开灯：使用发光材质
-                mesh.material.emissive.setHex(LIGHT_CONFIG.emissiveColor);
-                mesh.material.emissiveIntensity = LIGHT_CONFIG.emissiveIntensity;
-                
-                // 根据可见性设置颜色
-                if (isVisible) {
-                    mesh.material.color.setHex(LIGHT_CONFIG.onColor.visible);
-                } else {
-                    mesh.material.color.setHex(LIGHT_CONFIG.onColor.hidden);
+                // 点亮：对地发光面发暖光，本体按可见性着色
+                if (face) {
+                    face.material.color.setHex(0xfff0b8);
+                    face.material.opacity = 1;
                 }
+                body.material.emissive.setHex(LIGHT_CONFIG.emissiveColor);
+                body.material.emissiveIntensity = LIGHT_CONFIG.emissiveIntensity;
+                body.material.color.setHex(isVisible ? LIGHT_CONFIG.onColor.visible : LIGHT_CONFIG.onColor.hidden);
             } else {
-                // 关灯：移除发光效果
-                mesh.material.emissive.setHex(0x000000);
-                mesh.material.emissiveIntensity = 0;
-                
-                // 根据可见性设置颜色
-                if (isVisible) {
-                    mesh.material.color.setHex(LIGHT_CONFIG.offColor.visible);
-                } else {
-                    mesh.material.color.setHex(LIGHT_CONFIG.offColor.hidden);
+                if (face) {
+                    face.material.color.setHex(0x2a2a35);
                 }
+                body.material.emissive.setHex(0x000000);
+                body.material.emissiveIntensity = 0;
+                body.material.color.setHex(isVisible ? LIGHT_CONFIG.offColor.visible : LIGHT_CONFIG.offColor.hidden);
             }
         },
 
