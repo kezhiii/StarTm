@@ -1,0 +1,8 @@
+{
+  "lagThresholdSec": 90,
+  "sunAltGate": { "enabled": false, "thresholdDeg": -6 },
+  "edgeToleranceM": 10,
+  "driftToleranceM": 50,
+  "coneHalfAngleDeg": 1,
+  "minElevationDeg": 10
+}

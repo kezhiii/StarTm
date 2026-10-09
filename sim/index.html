@@ -20,6 +20,13 @@
   #stepSlider { width: 100%; }
   .kv { display: flex; justify-content: space-between; font-size: 12px; color: #8fa3c0; }
   select { flex: 1; padding: 6px; background: #1c2a47; color: #cfd8ea; border: 1px solid #33456b; border-radius: 6px; }
+  .ptable { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .ptable td { padding: 2px 4px; border-bottom: 1px solid #22304a; }
+  .ptable tr.group td { color: #7fd4ff; font-weight: bold; padding-top: 8px; border-bottom: 1px solid #33456b; }
+  .ptable .unit { color: #5a6b85; text-align: right; }
+  .st-empty { color: #5a6b85; }
+  .st-lag { color: #e67e22; font-size: 10px; }
+  .chart { width: 100%; height: 92px; display: block; margin-bottom: 8px; background: #0d1526; border-radius: 4px; }
 </style>
 </head>
 <body>
@@ -46,6 +53,20 @@
   </div>
   <input id="stepSlider" type="range" min="0" max="0" value="0">
   <div class="kv"><span id="kvStep">步 0 / 0</span><span id="kvInterval">步长 -- s</span></div>
+
+  <h2>星选择</h2>
+  <div class="row" id="satSel"></div>
+
+  <h2>参数表（表2-1 八项分组）</h2>
+  <table class="ptable"><tbody id="panelBody"></tbody></table>
+
+  <h2>构型曲线（当前时刻前 1 小时）</h2>
+  <canvas id="chartEdge" class="chart"></canvas>
+  <canvas id="chartCd" class="chart"></canvas>
+  <canvas id="chartDrift" class="chart"></canvas>
+
+  <h2>目标区昼夜（合肥，门限默认关）</h2>
+  <canvas id="chartSun" class="chart"></canvas>
 
   <h2>说明</h2>
   <div class="kv"><span>三维画面</span><span>StarTM iframe（唯一实例）</span></div>

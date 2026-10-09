@@ -1,4 +1,8 @@
 import { getState, patch } from './store.js';
+import { initPanels, render as renderPanels, setStateSource } from './panels.js';
+import { setStepSec } from './loader.js';
+
+const displayCfg = await (await fetch('/sim/config/display.json')).json();
 
 const $ = (id) => document.getElementById(id);
 const frame = $('stage');
@@ -61,6 +65,7 @@ function tick() {
         $('clock').textContent = fmtTs(bridge.getTimestamp(idx));
         $('stepSlider').value = idx;
         $('kvStep').textContent = `步 ${idx} / ${st.totalSteps}`;
+        renderPanels(st.simSeconds);
     } else if (Math.floor(before * 10) !== Math.floor(st.simSeconds * 10)) {
         // 同一步内的插值显示暂不做（StarTM 侧 progress=0），只更新走带
     }
@@ -92,6 +97,14 @@ $('btnAttach').onclick = async () => {
     refreshMeta();
     bridge.setStep(0);
     patch({ attached: true, simSeconds: 0, currentStep: 0, playing: false });
+    setStepSec(bridge.getStepIntervalSec());
+    try {
+        await initPanels(displayCfg);
+        setStateSource(() => getState().simSeconds);
+        renderPanels(0);
+    } catch (e) {
+        console.warn('参数表初始化失败（不阻塞时钟）:', e);
+    }
     $('status').textContent = '外部驱动已接管：时钟归本页面';
     $('btnAttach').classList.add('on');
     $('clock').textContent = fmtTs(bridge.getTimestamp(0));
@@ -121,6 +134,7 @@ $('stepSlider').oninput = (e) => {
     bridge.setStep(idx);
     $('clock').textContent = fmtTs(bridge.getTimestamp(idx));
     $('kvStep').textContent = `步 ${idx} / ${st.totalSteps}`;
+    renderPanels(st.simSeconds);
 };
 
 frame.addEventListener('load', () => { bridge = waitBridge(); });
