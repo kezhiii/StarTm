@@ -3,162 +3,198 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>天幕卫星 V0 · 飞行模拟仿真系统</title>
+<title>天幕卫星 V0 · 任务仿真工作台</title>
 <style>
+  /* ── 令牌：颜色只表达一种含义 ───────────────────── */
   :root {
     color-scheme: dark;
-    --ink:   #04080d;
-    --panel-a: rgba(11, 19, 28, .88);
-    --panel-b: rgba(6, 11, 18, .82);
-    --line:  #16232f;
+    --sel:    #7fe3d6;   /* 选中目标、当前读数 */
+    --actual: #6fa8dc;   /* 实际值、实际轨迹 */
+    --plan:   #8a9aab;   /* 规划值、标称 */
+    --event:  #e8a33d;   /* 事件与可见窗口 */
+    --bad:    #d8604b;   /* 超限、失败 */
+    --na:     #8ba0b3;   /* 未接入 / 尚未计算：这类文字必须比正文更容易被认出是「没有数据」 */
+    --txt:    #d5e2ee;
+    --label:  #9db2c6;
+    --dim:    #6a8095;
+    --bg:     #04080d;
+    --panel:  rgba(9, 16, 24, .92);
+    --line:   #16232f;
     --line-hot: #2e4a5f;
-    --txt:   #c3d4e2;
-    --label: #8ba0b4;
-    --dim:   #5c7288;
-    --data:  #7fe3d6;
-    --data-2:#7ba6e8;
-    --alert: #e8a33d;
-    --bad:   #d8604b;
     --num: "Bahnschrift SemiCondensed", "Bahnschrift", Consolas, "Segoe UI", monospace;
     --cn: "HarmonyOS Sans SC", "Source Han Sans SC", "Microsoft YaHei", sans-serif;
+    --rail: 224px;
+    --console: 352px;
   }
   * { box-sizing: border-box; margin: 0; }
-  html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink);
-               font: 12px/1.5 var(--cn); color: var(--txt); }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
+               font: 12.5px/1.55 var(--cn); color: var(--txt); }
+  button, input, select { font-family: inherit; color: inherit; }
 
   #stage { position: fixed; inset: 0; width: 100vw; height: 100vh; border: 0; background: #000; }
-  /* 画面四周压暗，使浮层读数不被高亮地球淹没 */
   #vignette { position: fixed; inset: 0; pointer-events: none;
-              background: radial-gradient(125% 95% at 50% 42%, transparent 52%, rgba(3, 7, 12, .62) 100%); }
+              background: radial-gradient(130% 100% at 50% 45%, transparent 58%, rgba(2, 5, 9, .5) 100%); }
 
-  .panel { position: fixed; background: linear-gradient(180deg, var(--panel-a), var(--panel-b));
-           border: 1px solid var(--line); border-radius: 2px;
-           box-shadow: 0 8px 28px rgba(0, 0, 0, .5); }
-  /* 角标：控制台观感，只在对角两段加亮线 */
-  .panel::before, .panel::after { content: ''; position: absolute; width: 11px; height: 11px; pointer-events: none; }
-  .panel::before { top: -1px; left: -1px; border-top: 1px solid var(--line-hot); border-left: 1px solid var(--line-hot); }
-  .panel::after { bottom: -1px; right: -1px; border-bottom: 1px solid var(--line-hot); border-right: 1px solid var(--line-hot); }
+  .panel { position: fixed; background: var(--panel); border: 1px solid var(--line);
+           box-shadow: 0 10px 34px rgba(0, 0, 0, .55); }
+  .tag { display: inline-flex; align-items: center; gap: 5px; padding: 1px 7px; font: 11.5px var(--num);
+         border: 1px solid var(--line-hot); color: var(--label); white-space: nowrap; }
+  .tag.ok { color: var(--sel); border-color: rgba(127, 227, 214, .45); }
+  .tag.warn { color: var(--event); border-color: rgba(232, 163, 61, .5); }
+  .tag.bad { color: var(--bad); border-color: rgba(216, 96, 75, .55); }
+  .tag.na { color: var(--na); border-color: #223141; }
+  .tag i { width: 5px; height: 5px; background: currentColor; }
 
-  .p-head { display: flex; align-items: center; gap: 8px; padding: 8px 11px; border-bottom: 1px solid var(--line); }
-  .p-head .tick { width: 2px; height: 12px; background: var(--data); }
-  .p-head.amber .tick { background: var(--alert); }
-  .p-head h2 { font: 600 12px/1 var(--cn); letter-spacing: .05em; color: #a2bad0; }
-  .p-head .meta { margin-left: auto; font: 11px var(--num); color: var(--dim); }
+  /* ── 顶栏：全局状态 ─────────────────────────────── */
+  #topbar { top: 0; left: 0; right: 0; height: 46px; display: flex; align-items: center; gap: 14px;
+            padding: 0 14px; border-left: 0; border-right: 0; border-top: 0; z-index: 5; }
+  #topbar .sys { font: 600 15px/1 var(--cn); letter-spacing: .02em; color: #e6f1fa; }
+  #topbar .sys small { display: block; margin-top: 3px; font: 11px var(--cn); color: var(--dim); letter-spacing: 0; }
+  #topbar .sep { width: 1px; height: 22px; background: var(--line); }
+  #topbar .grow { flex: 1; }
+  #topbar .clockmini { text-align: right; font: 12px var(--num); color: var(--label); letter-spacing: .02em; }
+  #topbar .clockmini b { display: block; font-size: 14px; color: var(--txt); }
+  .ghostbtn { padding: 6px 10px; font: 12px var(--cn); color: var(--label); background: transparent;
+              border: 1px solid var(--line); cursor: pointer; }
+  .ghostbtn:hover { color: var(--sel); border-color: var(--line-hot); }
+  .ghostbtn:focus-visible, .btn:focus-visible, .seg button:focus-visible,
+  .tgt:focus-visible, input:focus-visible, summary:focus-visible {
+    outline: 1px solid var(--sel); outline-offset: 1px; }
 
-  /* ── 左栏：任务时钟 ─────────────────────────────── */
-  #railLeft { top: 14px; left: 14px; width: 258px; }
-  #railLeft .ident { padding: 11px 11px 9px; }
-  #railLeft .ident b { display: block; font: 600 15px/1.25 var(--cn); color: #dbe8f4; letter-spacing: .02em; }
-  #railLeft .ident span { display: block; margin-top: 3px; font-size: 11px; color: var(--dim); }
-  .clock { padding: 10px 11px 12px; border-top: 1px solid var(--line); }
-  #tplus { font: 300 33px/1 var(--num); letter-spacing: .04em; color: #eaf3fa; font-variant-numeric: tabular-nums; }
-  #tplus .pre { font-size: 14px; color: var(--dim); margin-right: 5px; letter-spacing: .1em; }
-  #utcg { margin-top: 5px; font: 12px var(--num); color: var(--label); letter-spacing: .02em; }
-  #status { display: flex; align-items: center; gap: 6px; margin-top: 9px; font-size: 11px; color: var(--dim); }
-  #status .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--dim); }
-  #status.live .dot { background: var(--data); box-shadow: 0 0 7px var(--data); }
-  #status.err .dot { background: var(--bad); }
+  /* ── 左栏：目标与任务状态 ───────────────────────── */
+  #rail { top: 46px; left: 0; bottom: 96px; width: var(--rail); border-left: 0; border-bottom: 0;
+          display: flex; flex-direction: column; overflow-y: auto; }
+  .hd { padding: 9px 12px; font: 600 12px var(--cn); letter-spacing: .05em; color: #a2bad0;
+        border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 7px; }
+  .hd::before { content: ''; width: 2px; height: 12px; background: var(--sel); }
+  .hd .r { margin-left: auto; font: 11px var(--num); color: var(--dim); letter-spacing: 0; }
+  .tgt { display: block; width: 100%; text-align: left; padding: 9px 12px; background: transparent;
+         border: 0; border-bottom: 1px solid var(--line); border-left: 2px solid transparent; cursor: pointer; }
+  .tgt:hover { background: rgba(43, 74, 100, .28); }
+  .tgt[aria-current="true"] { border-left-color: var(--sel); background: rgba(127, 227, 214, .07); }
+  .tgt .n { display: flex; align-items: center; gap: 7px; font: 14px var(--num); letter-spacing: .03em; color: #dceaf5; }
+  .tgt .n .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--na); }
+  .tgt[aria-current="true"] .n { color: var(--sel); }
+  .tgt .g { display: flex; gap: 12px; margin-top: 3px; font: 12px var(--num); color: var(--label);
+            font-variant-numeric: tabular-nums; }
+  .tgt .g em { font-style: normal; color: var(--dim); font-size: 10.5px; }
+  .sum { padding: 4px 12px 10px; }
+  .kv { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 4px 0;
+        font-size: 11.5px; color: var(--dim); }
+  .kv b { font: 13px var(--num); font-weight: 500; color: var(--label); font-variant-numeric: tabular-nums; }
+  .kv b.ok { color: var(--sel); }
+  .kv b.bad { color: var(--bad); }
+  .note { padding: 8px 12px; font-size: 11px; color: var(--na); border-top: 1px solid var(--line); }
 
-  .kvlist { padding: 3px 11px 11px; }
-  .kv { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; font-size: 11px; color: var(--dim); }
-  .kv b { font: 11.5px var(--num); font-weight: 500; color: var(--label); text-align: right;
-          font-variant-numeric: tabular-nums; }
-  .btn { font: 12px var(--cn); padding: 7px 12px; color: var(--txt); background: rgba(30, 52, 71, .55);
-         border: 1px solid var(--line-hot); border-radius: 2px; cursor: pointer; white-space: nowrap; }
-  .btn:hover { background: rgba(43, 74, 100, .7); color: #eaf3fa; }
-  .btn.primary { border-color: rgba(127, 227, 214, .5); color: var(--data); }
-  .btn.primary:hover { background: rgba(127, 227, 214, .12); }
-  .btn.on { background: rgba(127, 227, 214, .14); border-color: var(--data); color: var(--data); }
-  .btn:focus-visible, .seg button:focus-visible, input:focus-visible, a.ghost:focus-visible {
-    outline: 1px solid var(--data-2); outline-offset: 1px; }
-  #btnAttach { width: 100%; margin: 2px 0 10px; }
-  .attach { padding: 0 11px; }
-
-  /* ── 左栏底部：弹出终端入口 ─────────────────────── */
-  .railfoot { padding: 9px 11px; border-top: 1px solid var(--line); }
-  a.ghost { display: inline-flex; align-items: center; gap: 6px; font-size: 11px;
-            color: var(--label); text-decoration: none; }
-  a.ghost::before { content: ''; width: 5px; height: 5px; background: var(--alert); }
-  a.ghost:hover { color: var(--data); }
-
-  /* ── 右栏：参数台 ───────────────────────────────── */
-  #console { top: 14px; right: 14px; bottom: 104px; width: 386px; display: flex; flex-direction: column;
-             backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
-  #console .body { flex: 1; overflow-y: auto; padding: 11px; scrollbar-width: thin;
-                   scrollbar-color: var(--line-hot) transparent; }
+  /* ── 右栏：选中目标 + 趋势 + 折叠区 ─────────────── */
+  #console { top: 46px; right: 0; bottom: 96px; width: var(--console); border-right: 0; border-bottom: 0;
+             display: flex; flex-direction: column; }
+  #console .body { flex: 1; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--line-hot) transparent; }
   #console .body::-webkit-scrollbar { width: 7px; }
   #console .body::-webkit-scrollbar-thumb { background: var(--line-hot); }
-  .seg { display: flex; border: 1px solid var(--line); border-radius: 2px; overflow: hidden; }
-  .seg button { flex: 1; padding: 6px 4px; font: 12px var(--num); letter-spacing: .04em; color: var(--label);
-                background: transparent; border: 0; border-left: 1px solid var(--line); cursor: pointer; }
-  .seg button:first-child { border-left: 0; }
-  .seg button:hover { color: #eaf3fa; background: rgba(43, 74, 100, .4); }
-  .seg button.on { color: var(--data); background: rgba(127, 227, 214, .1); box-shadow: inset 0 -2px 0 var(--data); }
-  .sec { margin: 14px 0 7px; font: 600 11px var(--cn); letter-spacing: .05em; color: #93aabf; }
-  .sec:first-child { margin-top: 0; }
-  .sec .hint { float: right; font: 10px var(--num); color: var(--dim); letter-spacing: 0; }
-
+  .hero { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line); }
+  .hero .cell { background: rgba(11, 19, 28, .6); padding: 10px 12px; }
+  .hero .k { font: 11px var(--cn); color: var(--dim); }
+  .hero .v { margin-top: 2px; font: 26px/1.05 var(--num); color: var(--sel); font-variant-numeric: tabular-nums;
+             letter-spacing: .01em; }
+  .hero .v u { text-decoration: none; font-size: 12px; color: var(--dim); margin-left: 4px; }
+  .hero .v.na { color: var(--na); font-size: 17px; }
+  .hero .v.bad { color: var(--bad); }
+  .strip { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  details { border-bottom: 1px solid var(--line); }
+  summary { padding: 9px 12px; font: 600 12px var(--cn); letter-spacing: .04em; color: #a2bad0;
+            cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; }
+  summary::-webkit-details-marker { display: none; }
+  summary::before { content: '+'; font: 14px var(--num); color: var(--dim); }
+  details[open] summary::before { content: '−'; }
+  summary .r { margin-left: auto; font: 11px var(--num); color: var(--dim); }
+  details .inner { padding: 0 12px 12px; }
   .ptable { width: 100%; border-collapse: collapse; }
-  .ptable td { padding: 2px 0; }
-  .ptable td.name { color: var(--label); font-size: 11px; }
-  .ptable td.val { text-align: right; font: 13px/1.5 var(--num); color: var(--data);
+  .ptable td { padding: 3px 0; }
+  .ptable td.name { color: var(--label); font-size: 11.5px; }
+  .ptable td.val { text-align: right; font: 14px/1.4 var(--num); color: var(--sel);
                    font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .ptable td.unit { text-align: left; width: 52px; padding-left: 7px; color: var(--dim); font-size: 10px; }
-  .ptable tr.group td { padding: 9px 0 4px; color: #9fb6cc; font-size: 11px; letter-spacing: .04em;
+  .ptable td.val.na { color: var(--na); font-size: 12px; }
+  .ptable td.val.bad { color: var(--bad); }
+  .ptable td.unit { text-align: left; width: 54px; padding-left: 8px; color: var(--dim); font-size: 10.5px; }
+  .ptable tr.group td { padding: 10px 0 4px; color: #9fb6cc; font-size: 11.5px; letter-spacing: .04em;
                         border-bottom: 1px solid var(--line); }
-  .ptable tr.group:first-child td { padding-top: 0; }
-  .st-empty { color: var(--dim) !important; }
-  .st-lag { color: var(--alert); font-size: 10px; }
-  .placeholder { padding: 26px 8px; text-align: center; color: var(--dim); font-size: 11px; }
+  .ptable tr.group:first-child td { padding-top: 2px; }
 
-  .metric { margin-bottom: 12px; border: 1px solid var(--line); border-radius: 2px; background: rgba(6, 11, 18, .5); }
-  .m-head { display: flex; align-items: baseline; gap: 8px; padding: 6px 8px 4px; }
-  .m-head .m-name { color: var(--label); font-size: 11px; }
-  .m-head .m-vals { margin-left: auto; display: flex; gap: 9px; }
-  .m-head .m-v { font: 13px var(--num); color: var(--data); font-variant-numeric: tabular-nums; }
-  .m-head .m-v i { display: inline-block; width: 5px; height: 5px; margin-right: 4px; border-radius: 1px; }
-  .m-head .m-unit { font-size: 10px; color: var(--dim); }
-  .metric canvas { display: block; width: 100%; height: 72px; }
+  /* 趋势图 */
+  .chart { padding: 10px 12px 12px; border-bottom: 1px solid var(--line); position: relative; }
+  .chart .ch-hd { display: flex; align-items: baseline; gap: 8px; }
+  .chart .ch-hd h3 { font: 600 12px var(--cn); color: #a9c0d6; letter-spacing: .03em; }
+  .chart .ch-hd .sub { margin-left: auto; font: 11px var(--num); color: var(--dim); }
+  .chart canvas { display: block; width: 100%; height: 104px; margin-top: 6px; cursor: crosshair; }
+  .legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 5px; font: 11px var(--num); color: var(--label); }
+  .legend span { display: inline-flex; align-items: center; gap: 4px; }
+  .legend i { width: 9px; height: 2px; background: currentColor; }
+  .legend i.sw { width: 12px; height: 7px; background: var(--event); }
+  .legend i.sw.disp { background: var(--sel); }
+  .legend i.dash { background: repeating-linear-gradient(90deg, currentColor 0 3px, transparent 3px 5px); }
+  .legend b { color: var(--sel); font-weight: 500; }
+  #tip { position: fixed; z-index: 9; display: none; padding: 4px 7px; background: rgba(4, 9, 15, .95);
+         border: 1px solid var(--line-hot); font: 11.5px var(--num); color: var(--txt);
+         font-variant-numeric: tabular-nums; pointer-events: none; white-space: nowrap; }
 
-  /* ── 底部走带 ───────────────────────────────────── */
-  #transport { left: 286px; right: 414px; bottom: 14px; height: 76px; }
-  #transport .bar { display: flex; align-items: center; gap: 8px; padding: 8px 11px 2px; }
-  #transport .icon { width: 30px; padding: 5px 0; text-align: center; font: 12px var(--num); }
-  #transport .legend { margin-left: auto; display: flex; gap: 12px; font-size: 10px; color: var(--dim); }
-  #transport .legend i { display: inline-block; width: 14px; height: 3px; margin-right: 4px; vertical-align: middle; }
-  .tl { position: relative; height: 26px; margin: 0 11px 6px; }
-  .tl .rail { position: absolute; left: 0; right: 0; top: 15px; height: 3px; background: rgba(36, 56, 74, .8); }
-  .tl .bands { position: absolute; left: 0; right: 0; top: 3px; height: 8px; }
-  .tl .band { position: absolute; top: 0; height: 100%; background: rgba(232, 163, 61, .75); }
-  .tl .band.disp { top: 0; background: rgba(127, 227, 214, .6); }
-  .tl .ticks { position: absolute; left: 0; right: 0; top: 19px; height: 7px;
-               border-left: 1px solid var(--line-hot); }
+  /* ── 底部走带：播放 / 时间定位 / 视角 三组 ──────── */
+  #transport { left: 0; right: 0; bottom: 0; height: 96px; display: flex; align-items: stretch;
+               border-left: 0; border-right: 0; border-bottom: 0; z-index: 5; }
+  .grp { display: flex; flex-direction: column; justify-content: center; gap: 5px; padding: 9px 12px;
+         border-right: 1px solid var(--line); }
+  .grp .gl { font: 10.5px var(--cn); letter-spacing: .06em; color: var(--dim); }
+  .grp .gr { display: flex; align-items: center; gap: 7px; }
+  .btn { padding: 6px 11px; font: 12.5px var(--cn); color: var(--txt); background: rgba(30, 52, 71, .5);
+         border: 1px solid var(--line-hot); cursor: pointer; }
+  .btn:hover { background: rgba(43, 74, 100, .68); color: #eaf3fa; }
+  .btn.on { color: var(--sel); border-color: rgba(127, 227, 214, .55); background: rgba(127, 227, 214, .12); }
+  .btn.icon { width: 34px; padding: 6px 0; text-align: center; font: 13px var(--num); }
+  .seg { display: flex; border: 1px solid var(--line-hot); }
+  .seg button { padding: 6px 10px; font: 12px var(--num); letter-spacing: .03em; color: var(--label);
+                background: transparent; border: 0; border-left: 1px solid var(--line-hot); cursor: pointer; }
+  .seg button:first-child { border-left: 0; }
+  .seg button:hover { color: #eaf3fa; background: rgba(43, 74, 100, .45); }
+  .seg button.on { color: var(--sel); background: rgba(127, 227, 214, .12); }
+  #grpTime { flex: 1; min-width: 0; }
+  .tline { display: flex; align-items: baseline; gap: 14px; }
+  #tplus { font: 300 27px/1 var(--num); letter-spacing: .03em; color: #eef5fb; font-variant-numeric: tabular-nums; }
+  #tplus .pre { font-size: 13px; color: var(--dim); margin-right: 5px; letter-spacing: .1em; }
+  .tmeta { font: 12px var(--num); color: var(--label); font-variant-numeric: tabular-nums; }
+  .tmeta em { font-style: normal; color: var(--dim); }
+  .tl { position: relative; height: 26px; margin-top: 2px; }
+  .tl .rail { position: absolute; left: 0; right: 0; top: 16px; height: 3px; background: rgba(36, 56, 74, .85); }
+  .tl .bands { position: absolute; left: 0; right: 0; top: 4px; height: 8px; pointer-events: none; }
+  .tl .band { position: absolute; top: 0; height: 100%; background: var(--event); opacity: .85; }
+  .tl .band.disp { top: 0; background: var(--sel); opacity: .8; }
+  .tl .ticks { position: absolute; left: 0; right: 0; top: 20px; height: 6px; border-left: 1px solid var(--line-hot); }
   .tl .tick { position: absolute; top: 0; width: 1px; height: 4px; background: var(--line-hot); }
-  .tl .ticklab { position: absolute; top: 4px; font: 9px var(--num); color: var(--dim); transform: translateX(-50%); }
+  .tl .ticklab { position: absolute; top: 3px; font: 9.5px var(--num); color: var(--dim); transform: translateX(-50%); }
   #stepSlider { position: absolute; inset: 0; width: 100%; height: 26px; margin: 0;
                 -webkit-appearance: none; appearance: none; background: transparent; cursor: ew-resize; }
-  #stepSlider::-webkit-slider-thumb { -webkit-appearance: none; width: 2px; height: 24px; background: var(--data);
-                                      box-shadow: 0 0 8px rgba(127, 227, 214, .8); }
-  #stepSlider::-moz-range-thumb { width: 2px; height: 24px; border: 0; border-radius: 0; background: var(--data);
-                                  box-shadow: 0 0 8px rgba(127, 227, 214, .8); }
-  #stepSlider::-webkit-slider-runnable-track { background: transparent; }
-  #stepSlider::-moz-range-track { background: transparent; }
-  .foot { padding: 0 11px 8px; font-size: 10px; color: var(--dim); }
+  #stepSlider::-webkit-slider-thumb { -webkit-appearance: none; width: 2px; height: 25px; background: var(--sel);
+                                      box-shadow: 0 0 9px rgba(127, 227, 214, .85); }
+  #stepSlider::-moz-range-thumb { width: 2px; height: 25px; border: 0; border-radius: 0; background: var(--sel);
+                                  box-shadow: 0 0 9px rgba(127, 227, 214, .85); }
+  #stepSlider::-webkit-slider-runnable-track, #stepSlider::-moz-range-track { background: transparent; }
+  #grpView { border-right: 0; }
 
-  @media (max-width: 1180px) {
-    #console { width: 320px; }
-    #transport { right: 348px; }
-  }
-  @media (max-width: 900px) {
-    #railLeft { display: none; }
-    #console { top: 14px; bottom: 104px; right: 14px; width: 300px; }
-    #transport { left: 14px; right: 328px; }
+  /* 面板收起：把屏幕让给三维 */
+  body.tight #rail, body.tight #console { transform: translateX(-130%); }
+  body.tight #console { transform: translateX(130%); }
+  #rail, #console { transition: transform .22s ease; }
+
+  @media (max-width: 1280px) { :root { --console: 316px; --rail: 200px; } }
+  @media (max-width: 980px) {
+    #rail { display: none; }
+    #topbar .sys small { display: none; }
   }
   @media (prefers-reduced-motion: no-preference) {
-    .panel { animation: rise .28s ease-out both; }
-    #console { animation-delay: .06s; }
-    #transport { animation-delay: .12s; }
-    @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+    /* backwards：入场结束后不再占用 transform，否则面板收起的位移会被动画填充覆盖 */
+    .panel { animation: rise .26s ease-out backwards; }
+    #console { animation-delay: .05s; }
+    #transport { animation-delay: .1s; }
+    @keyframes rise { from { opacity: 0; transform: translateY(5px); } }
   }
 </style>
 </head>
@@ -166,74 +202,88 @@
 <iframe id="stage" src="/web/?bare=1" title="编队三维态势"></iframe>
 <div id="vignette"></div>
 
-<div class="panel" id="railLeft">
-  <div class="ident">
-    <b>天幕卫星 V0</b>
-    <span>飞行模拟仿真系统 · 编队态势与参数回放</span>
-  </div>
-  <div class="clock">
-    <div id="tplus"><span class="pre">T+</span>--:--:--</div>
-    <div id="utcg">UTC --</div>
-    <div id="status"><span class="dot"></span><span id="statusText">等待画面桥接</span></div>
-  </div>
-  <div class="attach"><button id="btnAttach" class="btn primary">接入数据并接管时钟</button></div>
-  <div class="kvlist">
-    <div class="kv"><span>数据源</span><b id="kvSrc">星历文件回放</b></div>
-    <div class="kv"><span>步长</span><b id="kvInterval">--</b></div>
-    <div class="kv"><span>参数版本</span><b id="kvVer">--</b></div>
-    <div class="kv"><span>地面站</span><b id="kvStation">--</b></div>
-    <div class="kv"><span>当前步</span><b id="kvStep">0 / 0</b></div>
-  </div>
-  <div class="railfoot">
-    <a class="ghost" href="/web/" target="_blank" rel="noopener">打开观测终端（灯光 / 图案 / 协议）</a>
-  </div>
-</div>
+<header class="panel" id="topbar">
+  <div class="sys">天幕卫星 V0 · 任务仿真<small>飞行模拟仿真系统 · 编队显示载荷</small></div>
+  <span class="sep"></span>
+  <span id="runTag" class="tag na"><i></i><span id="runTagText">未接入</span></span>
+  <span id="alarmTag" class="tag na" title="参数超出允许范围的项数"><i></i>超限 <b id="alarmCount">0</b> 项</span>
+  <span id="dataTag" class="tag na"><i></i><span id="dataTagText">数据源未连接</span></span>
+  <button class="btn primary" id="btnAttach">接入数据</button>
+  <span class="grow"></span>
+  <div class="clockmini">数据时间<b id="utcg">--</b></div>
+  <span class="sep"></span>
+  <button class="ghostbtn" id="btnTogglePanels" aria-expanded="true" aria-controls="rail console"
+          title="收起左右面板，把屏幕让给三维画面（快捷键 H）">收起面板</button>
+  <a class="ghostbtn" href="/web/" target="_blank" rel="noopener" style="display:flex;align-items:center">观测终端</a>
+</header>
 
-<div class="panel" id="console">
-  <div class="p-head">
-    <span class="tick"></span><h2>参数台</h2>
-    <span class="meta" id="kvSat">TM0S1</span>
-  </div>
+<nav class="panel" id="rail" aria-label="目标列表与任务状态">
+  <div class="hd">目标<span class="r" id="tgtCount">3 颗</span></div>
+  <div id="tgtList"></div>
+  <div class="hd">任务状态</div>
+  <div class="sum" id="missionSum"></div>
+  <div class="note">三维画面为概略显示，几何判据以数据文件为准；事件按真实时刻单点显示，不插值。</div>
+</nav>
+
+<aside class="panel" id="console" aria-label="选中目标详情与趋势">
+  <div class="hd">选中目标<span class="r" id="kvSat">TM0S1</span></div>
   <div class="body">
-    <div class="seg" id="satSel" role="group" aria-label="选择卫星"></div>
-    <div class="sec">参数表<span class="hint">表2-1 八项分组</span></div>
-    <table class="ptable"><tbody id="panelBody">
-      <tr><td class="placeholder" colspan="3">接入数据后显示连续状态与任务参数</td></tr>
-    </tbody></table>
-    <div class="sec">构型与目标区曲线<span class="hint">当前时刻前 1 小时</span></div>
-    <div id="metrics"></div>
-    <div class="sec" style="margin-bottom:0">说明</div>
-    <div class="kv"><span>三维画面</span><b>概略显示，判据以数据文件为准</b></div>
-    <div class="kv"><span>事件</span><b>按真实时刻单点显示，不插值</b></div>
+    <div class="hero" id="hero"></div>
+    <div class="strip" id="badges"></div>
+    <div class="chart" id="chEdge"></div>
+    <div class="chart" id="chDrift"></div>
+    <div class="chart" id="chSun"></div>
+    <details>
+      <summary>表2-1 全参数<span class="r" id="kvLag">--</span></summary>
+      <div class="inner"><table class="ptable"><tbody id="panelBody">
+        <tr><td class="name" colspan="3">接入数据后显示连续状态与任务参数</td></tr>
+      </tbody></table></div>
+    </details>
+    <details>
+      <summary>系统遥测<span class="r">能源 / 热</span></summary>
+      <div class="inner"><table class="ptable"><tbody id="telemetryBody"></tbody></table></div>
+    </details>
   </div>
-</div>
+</aside>
 
-<div class="panel" id="transport">
-  <div class="bar">
-    <button id="btnPlay" class="btn icon" aria-label="播放">▶</button>
-    <button id="btnPause" class="btn icon" aria-label="暂停">⏸</button>
-    <div class="seg" id="rate" style="width:150px" role="group" aria-label="走带倍速">
-      <button data-rate="1" class="on">1×</button>
-      <button data-rate="10">10×</button>
-      <button data-rate="60">60×</button>
+<footer class="panel" id="transport">
+  <div class="grp" id="grpPlay">
+    <span class="gl">播放</span>
+    <div class="gr">
+      <button id="btnPlay" class="btn icon" aria-label="播放">▶</button>
+      <button id="btnPause" class="btn icon" aria-label="暂停">⏸</button>
+      <div class="seg" id="rate" role="group" aria-label="走带倍速">
+        <button data-rate="1" class="on">1×</button>
+        <button data-rate="10">10×</button>
+        <button data-rate="60">60×</button>
+      </div>
     </div>
-    <div class="seg" id="viewSel" style="width:164px" role="group" aria-label="三维视角">
+  </div>
+  <div class="grp" id="grpTime">
+    <div class="tline">
+      <div id="tplus"><span class="pre">T+</span>--:--:--</div>
+      <div class="tmeta"><em>仿真</em> <span id="kvStep">0 / 0</span> · <em>步长</em> <span id="kvStepSec">--</span></div>
+      <div class="tmeta" style="margin-left:auto"><em>参数版本</em> <span id="kvVer">--</span></div>
+    </div>
+    <div class="tl">
+      <div class="bands" id="tlBands"></div>
+      <div class="rail"></div>
+      <div class="ticks" id="tlTicks"></div>
+      <input id="stepSlider" type="range" min="0" max="0" value="0" step="1" aria-label="仿真时间定位">
+    </div>
+    <div class="legend" id="bandLegend" style="gap:14px"></div>
+  </div>
+  <div class="grp" id="grpView">
+    <span class="gl">视角</span>
+    <div class="seg" id="viewSel" role="group" aria-label="三维视角模式">
       <button data-view="third" class="on">全局轨道</button>
+      <button data-view="follow">目标跟随</button>
       <button data-view="center">编队近景</button>
     </div>
-    <div class="legend">
-      <span><i style="background:rgba(232,163,61,.75)"></i>共同可见</span>
-      <span><i style="background:rgba(127,227,214,.6)"></i>显示有效</span>
-    </div>
   </div>
-  <div class="tl">
-    <div class="bands" id="tlBands"></div>
-    <div class="rail"></div>
-    <div class="ticks" id="tlTicks"></div>
-    <input id="stepSlider" type="range" min="0" max="0" value="0" step="1" aria-label="时间走带">
-  </div>
-</div>
+</footer>
 
-<script type="module" src="./js/main.js?v=11"></script>
+<div id="tip"></div>
+<script type="module" src="./js/main.js?v=22"></script>
 </body>
 </html>

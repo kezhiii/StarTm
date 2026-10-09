@@ -3,68 +3,235 @@
     {
       "name": "① 地面显示图形",
       "rows": [
-        { "file": "formation_geom", "field": "edge_12", "name": "边长 TM0S1-TM0S2", "unit": "m", "scale": 1000, "ref": "表3-6 构型几何" },
-        { "file": "formation_geom", "field": "edge_23", "name": "边长 TM0S2-TM0S3", "unit": "m", "scale": 1000, "ref": "表3-6 构型几何" },
-        { "file": "formation_geom", "field": "edge_31", "name": "边长 TM0S3-TM0S1", "unit": "m", "scale": 1000, "ref": "表3-6 构型几何" },
-        { "file": "formation_geom", "field": "rot_phase_TM0S1", "name": "旋转相位", "unit": "deg", "ref": "表3-6 构型几何" }
+        {
+          "file": "formation_geom",
+          "field": "edge_12",
+          "name": "边长 TM0S1-TM0S2",
+          "unit": "m",
+          "scale": 1000,
+          "ref": "表3-6 构型几何"
+        },
+        {
+          "file": "formation_geom",
+          "field": "edge_23",
+          "name": "边长 TM0S2-TM0S3",
+          "unit": "m",
+          "scale": 1000,
+          "ref": "表3-6 构型几何"
+        },
+        {
+          "file": "formation_geom",
+          "field": "edge_31",
+          "name": "边长 TM0S3-TM0S1",
+          "unit": "m",
+          "scale": 1000,
+          "ref": "表3-6 构型几何"
+        },
+        {
+          "file": "formation_geom",
+          "field": "rot_phase_TM0S1",
+          "name": "旋转相位",
+          "unit": "deg",
+          "ref": "表3-6 构型几何"
+        }
       ]
     },
     {
       "name": "② 共同可见性",
       "rows": [
-        { "file": "ground_obs", "perSat": true, "field": "visible", "name": "单星可见", "unit": "0/1", "ref": "表3-6 目标观察状态" },
-        { "file": "ground_obs", "perSat": true, "field": "common_vis", "name": "三星共同可见", "unit": "0/1", "ref": "表3-6 目标观察状态" },
-        { "file": "ground_obs", "perSat": true, "field": "az", "name": "方位角", "unit": "deg", "ref": "表3-6 目标观察状态" },
-        { "file": "ground_obs", "perSat": true, "field": "el", "name": "仰角", "unit": "deg", "ref": "表3-6 目标观察状态" },
-        { "file": "ground_obs", "perSat": true, "field": "range", "name": "斜距", "unit": "km", "ref": "表3-6 目标观察状态" }
+        {
+          "file": "ground_obs",
+          "field": "visible",
+          "name": "单星可见",
+          "unit": "0/1",
+          "ref": "表3-6 目标观察状态"
+        },
+        {
+          "file": "ground_obs",
+          "field": "common_vis",
+          "name": "三星共同可见",
+          "unit": "0/1",
+          "ref": "表3-6 目标观察状态"
+        },
+        {
+          "file": "ground_obs",
+          "field": "az",
+          "name": "方位角",
+          "unit": "deg",
+          "ref": "表3-6 目标观察状态"
+        },
+        {
+          "file": "ground_obs",
+          "field": "el",
+          "name": "仰角",
+          "unit": "deg",
+          "ref": "表3-6 目标观察状态"
+        },
+        {
+          "file": "ground_obs",
+          "field": "range",
+          "name": "斜距",
+          "unit": "km",
+          "ref": "表3-6 目标观察状态"
+        }
       ]
     },
     {
       "name": "③ 姿态指向",
       "rows": [
-        { "file": "attitude", "perSat": true, "field": "q_j2b_w", "name": "四元数 w（x,y,z 展开见悬停）", "unit": "无量纲", "ref": "表3-6 姿态状态", "extra": ["q_j2b_x", "q_j2b_y", "q_j2b_z"] },
-        { "file": "attitude", "perSat": true, "field": "att_mode", "name": "姿态模式", "unit": "-", "ref": "表3-6 姿态状态" },
-        { "file": "attitude", "perSat": true, "field": "stable", "name": "稳定标志", "unit": "0/1", "ref": "表3-6 姿态状态" },
-        { "file": "ground_obs", "perSat": true, "field": "off_axis", "name": "目标离轴角", "unit": "deg", "ref": "表3-6 指向状态" },
-        { "file": "ground_obs", "perSat": true, "field": "incone", "name": "目标入锥(≤1°)", "unit": "0/1", "ref": "表3-6 指向状态" }
+        {
+          "file": "attitude",
+          "field": "q_j2b_w",
+          "name": "四元数 w（x,y,z 展开见悬停）",
+          "unit": "无量纲",
+          "ref": "表3-6 姿态状态"
+        },
+        {
+          "file": "attitude",
+          "field": "att_mode",
+          "name": "姿态模式",
+          "unit": "-",
+          "ref": "表3-6 姿态状态"
+        },
+        {
+          "file": "attitude",
+          "field": "stable",
+          "name": "稳定标志",
+          "unit": "0/1",
+          "ref": "表3-6 姿态状态"
+        },
+        {
+          "file": "ground_obs",
+          "field": "off_axis",
+          "name": "目标离轴角",
+          "unit": "deg",
+          "ref": "表3-6 指向状态"
+        },
+        {
+          "file": "ground_obs",
+          "field": "incone",
+          "name": "目标入锥(≤1°)",
+          "unit": "0/1",
+          "ref": "表3-6 指向状态"
+        }
       ]
     },
     {
       "name": "④ 亮度与频闪",
       "rows": [
-        { "file": "display", "perSat": true, "field": "plan_strobe", "name": "计划点亮", "unit": "0/1", "ref": "表3-6 显示计划" },
-        { "file": "display", "perSat": true, "field": "actual_strobe", "name": "实际点亮", "unit": "0/1", "ref": "表3-6 显示执行" },
-        { "file": "display", "perSat": true, "field": "freq_hz", "name": "频率", "unit": "Hz", "ref": "表3-6 显示计划" },
-        { "file": "display", "perSat": true, "field": "duty", "name": "占空比", "unit": "0~1", "ref": "表3-6 显示计划" },
-        { "file": "display", "perSat": true, "field": "brightness", "name": "亮度", "unit": "0~1", "ref": "表3-6 显示计划" }
+        {
+          "file": "display",
+          "field": "plan_strobe",
+          "name": "计划点亮",
+          "unit": "0/1",
+          "ref": "表3-6 显示计划"
+        },
+        {
+          "file": "display",
+          "field": "actual_strobe",
+          "name": "实际点亮",
+          "unit": "0/1",
+          "ref": "表3-6 显示执行"
+        },
+        {
+          "file": "display",
+          "field": "freq_hz",
+          "name": "频率",
+          "unit": "Hz",
+          "ref": "表3-6 显示计划"
+        },
+        {
+          "file": "display",
+          "field": "duty",
+          "name": "占空比",
+          "unit": "0~1",
+          "ref": "表3-6 显示计划"
+        },
+        {
+          "file": "display",
+          "field": "brightness",
+          "name": "亮度",
+          "unit": "0~1",
+          "ref": "表3-6 显示计划"
+        }
       ]
     },
     {
       "name": "⑤ 有效显示",
       "rows": [
-        { "file": "display", "perSat": true, "field": "effective", "name": "有效显示", "unit": "0/1", "ref": "表3-6 显示执行" },
-        { "file": "ground_obs", "perSat": true, "field": "sun_alt", "name": "目标区太阳高度", "unit": "deg", "ref": "ADR-0005（判据默认关）" }
+        {
+          "file": "display",
+          "field": "effective",
+          "name": "有效显示",
+          "unit": "0/1",
+          "ref": "表3-6 显示执行"
+        },
+        {
+          "file": "ground_obs",
+          "field": "sun_alt",
+          "name": "目标区太阳高度",
+          "unit": "deg",
+          "ref": "ADR-0005（判据默认关）"
+        }
       ]
     },
     {
-      "name": "⑥ 能源状态（合成数据未计算，留空值演示）",
+      "name": "⑥ 能源状态",
       "rows": [
-        { "file": "power", "perSat": true, "field": "gen_power", "name": "发电功率", "unit": "W", "ref": "4.3.4 TBC" },
-        { "file": "power", "perSat": true, "field": "battery_margin", "name": "电量裕度", "unit": "%", "ref": "4.3.4 TBC" }
-      ]
+        {
+          "file": "power",
+          "field": "gen_power",
+          "name": "发电功率",
+          "unit": "W",
+          "ref": "4.3.4 TBC"
+        },
+        {
+          "file": "power",
+          "field": "battery_margin",
+          "name": "电量裕度",
+          "unit": "%",
+          "ref": "4.3.4 TBC"
+        }
+      ],
+      "panel": "telemetry"
     },
     {
-      "name": "⑦ 热状态（合成数据未计算，留空值演示）",
+      "name": "⑦ 热状态",
       "rows": [
-        { "file": "thermal", "perSat": true, "field": "temp_main", "name": "主要设备温度", "unit": "℃", "ref": "表3-6 热状态：未计算保留为空" },
-        { "file": "thermal", "perSat": true, "field": "over_limit", "name": "超限标志", "unit": "0/1", "ref": "表3-6 热状态" }
-      ]
+        {
+          "file": "thermal",
+          "field": "temp_main",
+          "name": "主要设备温度",
+          "unit": "℃",
+          "ref": "表3-6 热状态：未计算保留为空"
+        },
+        {
+          "file": "thermal",
+          "field": "over_limit",
+          "name": "超限标志",
+          "unit": "0/1",
+          "ref": "表3-6 热状态"
+        }
+      ],
+      "panel": "telemetry"
     },
     {
       "name": "⑧ 数据完整性",
       "rows": [
-        { "file": "time_ident", "field": "param_ver", "name": "参数版本", "unit": "-", "ref": "表3-6 时间与标识" },
-        { "file": "time_ident", "field": "mode", "name": "运行工况", "unit": "-", "ref": "表3-6 时间与标识" }
+        {
+          "file": "time_ident",
+          "field": "param_ver",
+          "name": "参数版本",
+          "unit": "-",
+          "ref": "表3-6 时间与标识"
+        },
+        {
+          "file": "time_ident",
+          "field": "mode",
+          "name": "运行工况",
+          "unit": "-",
+          "ref": "表3-6 时间与标识"
+        }
       ]
     }
   ]

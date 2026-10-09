@@ -165,8 +165,10 @@ for k in (1, 2, 3):
     az[k] = np.degrees(np.arctan2(d[0], d[1])) % 360.0
     vis[k] = el[k] >= EL_MIN
 common = vis[1] & vis[2] & vis[3]
-sun_enu = M_enu @ (sun_i - obs_itrf[:, None])
-sun_alt = np.degrees(np.arcsin(np.clip(sun_enu[2]/np.linalg.norm(sun_enu, axis=0), -1, 1)))
+# 太阳按无穷远处理：sun_u 已归一化，再减测站位置会把方向向量压成指向地心，
+# 高度角就恒成 −90°（此前的 sun_alt 列即为此错误）
+sun_enu = M_enu @ sun_i
+sun_alt = np.degrees(np.arcsin(np.clip(sun_enu[2], -1, 1)))
 print(f"   共同可见 {int(common.sum())} s（门限 {EL_MIN}°）；太阳高度范围 "
       f"{sun_alt.min():.2f}° ~ {sun_alt.max():.2f}°")
 

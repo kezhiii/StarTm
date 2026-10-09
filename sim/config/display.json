@@ -1,8 +1,83 @@
 {
   "lagThresholdSec": 90,
-  "sunAltGate": { "enabled": false, "thresholdDeg": -6 },
+  "sunAltGate": {
+    "enabled": false,
+    "thresholdDeg": -6
+  },
   "edgeToleranceM": 10,
   "driftToleranceM": 50,
   "coneHalfAngleDeg": 1,
-  "minElevationDeg": 10
+  "minElevationDeg": 10,
+  "edgeNominalM": 1000,
+  "charts": [
+    {
+      "id": "chEdge",
+      "title": "编队边长",
+      "file": "formation_geom",
+      "unit": "m",
+      "scale": 1000,
+      "series": [
+        {
+          "field": "edge_12",
+          "name": "S1–S2"
+        },
+        {
+          "field": "edge_23",
+          "name": "S2–S3"
+        },
+        {
+          "field": "edge_31",
+          "name": "S3–S1"
+        }
+      ],
+      "planLabel": "标称（初始）",
+      "bandLabel": "允许 ±10 m（对初始构型）",
+      "bandFromNominal": true,
+      "band": "tolerance"
+    },
+    {
+      "id": "chDrift",
+      "title": "参考中心漂移（RTN）",
+      "file": "formation_geom",
+      "unit": "m",
+      "scale": 1000,
+      "series": [
+        {
+          "field": "drift_R",
+          "name": "R 径向"
+        },
+        {
+          "field": "drift_T",
+          "name": "T 沿迹"
+        },
+        {
+          "field": "drift_N",
+          "name": "N 法向"
+        }
+      ]
+    },
+    {
+      "id": "chSun",
+      "title": "目标区太阳高度（合肥）",
+      "file": "ground_obs",
+      "unit": "°",
+      "scale": 1,
+      "series": [
+        {
+          "field": "sun_alt",
+          "name": "太阳高度"
+        }
+      ],
+      "gate": true,
+      "gateLabel": "天黑门限 −6°（默认不参与判定）"
+    }
+  ],
+  "notComputed": [
+    "display.effective",
+    "ground_obs.incone",
+    "formation_geom.drift_R",
+    "formation_geom.drift_T",
+    "formation_geom.drift_N"
+  ],
+  "notComputedNote": "effective/incone 取决于显示载荷真实指向；drift_* 因参考中心逐秒列未交付、当前用三星几何中心代替，恒为 0"
 }
