@@ -41,3 +41,6 @@ __pycache__/
 # Project directories
 .lingma/
 .superpowers/
+
+# 飞行模拟仿真系统数据（可由 sim/tools 重新生成）
+sim-data/
