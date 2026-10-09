@@ -1,5 +1,5 @@
 // 卫星模型：1400×1200×600 mm 箱体 + ±Y 双太阳翼 + −Z 对地发光面（方案 4.1）
-// 尺寸为 third-person 场景单位（地球半径 50），与原 0.5 半径球体观感相当
+// 组内尺寸取 1 量级，实际显示大小由 applyScreenScale 按相机距离给（第三视角）或按视角缩放给（主星视角）
 import * as THREE from 'three';
 
 export function buildSatelliteMesh(bodyMaterial) {
@@ -29,6 +29,39 @@ export function buildSatelliteMesh(bodyMaterial) {
     return group;
 }
 
+/**
+ * 让卫星在屏幕上保持大致恒定的大小：按相机距离换算组缩放。
+ * 0.022 对应视高约 3.5%（透视 75°），远近差别不至于看不见或糊成一片。
+ */
+export function applyScreenScale(meshes, camera, { k = 0.022, min = 1.2, max = 18 } = {}) {
+    if (!camera) return;
+    for (const m of meshes || []) {
+        if (!m || !m.visible) continue;
+        const d = camera.position.distanceTo(m.position);
+        m.scale.setScalar(Math.max(min, Math.min(max, d * k)));
+    }
+}
+
+/** 选中框：单位半径环，摆放时按目标的屏幕缩放放大 */
+export function buildSelectionRing() {
+    return new THREE.Mesh(
+        new THREE.RingGeometry(1, 1.12, 48),
+        new THREE.MeshBasicMaterial({
+            color: 0x7fe3d6, transparent: true, opacity: 0.95,
+            side: THREE.DoubleSide, depthWrite: false,
+        })
+    );
+}
+
+export function placeSelectionRing(ring, mesh, camera) {
+    if (!ring) return;
+    const on = !!mesh && mesh.visible;
+    ring.visible = on;
+    if (!on) return;
+    ring.position.copy(mesh.position);
+    ring.quaternion.copy(camera.quaternion);
+    ring.scale.setScalar(mesh.scale.x * 3.4);
+}
 /**
  * 文字精灵标签（星号、站名）。父级缩放会作用到标签上，按所在组的尺度给 scale。
  */

@@ -136,22 +136,16 @@ export function createLightManager(getSceneObjectsFn) {
                 return;
             }
 
-            // 尝试所有可能的卫星网格数组（注意：空数组 [] 是 truthy，必须检查 length）
-            const meshes = sceneObjects.satelliteMeshes3D?.length ? sceneObjects.satelliteMeshes3D :
-                          (sceneObjects.satelliteMeshes1D?.length ? sceneObjects.satelliteMeshes1D :
-                          sceneObjects.satelliteMeshesCenter);
-
-            if (!meshes) {
-                if (satIdx === 0) console.warn('[LIGHT] 找不到卫星网格数组');
+            // 当前视角只有一组网格存在（切换时其余被清空），合起来按星号找：
+            // 主星视角的从星数组不含被跟随的那颗，按下标取会整体错一位
+            const so = sceneObjects;
+            const pool = [...(so.satelliteMeshes3D || []), ...(so.satelliteMeshes1D || []),
+                          ...(so.satelliteMeshesCenter || []), so.centerSatMarker].filter(Boolean);
+            const mesh = pool.find(m => m.userData.satIdx === satIdx);
+            if (!mesh) {
+                if (satIdx === 0) console.warn(`[LIGHT] 星号 ${satIdx} 无对应网格 (候选 ${pool.length} 个)`);
                 return;
             }
-
-            if (!meshes[satIdx]) {
-                if (satIdx === 0) console.warn(`[LIGHT] 卫星 ${satIdx} 不存在 (数组长度: ${meshes.length})`);
-                return;
-            }
-
-            const mesh = meshes[satIdx];
 
             // 关键修复：检查网格是否仍然有效，防止视角切换时操作已销毁的网格
             if (!mesh || !mesh.parent) {

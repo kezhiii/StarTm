@@ -30,7 +30,11 @@ export function clearSceneObjects(scene, camera, appState) {
             if (obj.geometry && !sharedRes.has(obj.geometry)) obj.geometry.dispose();
             if (obj.material) {
                 const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-                mats.forEach(m => { if (!sharedRes.has(m)) m.dispose(); });
+                mats.forEach(m => {
+                    if (sharedRes.has(m)) return;
+                    if (m.map && !sharedRes.has(m.map)) m.map.dispose();   // 标签精灵的画布纹理不释放会逐次累积
+                    m.dispose();
+                });
             }
         } catch (e) {
             // 开发环境输出警告，帮助发现潜在 bug
@@ -46,6 +50,7 @@ export function clearSceneObjects(scene, camera, appState) {
     so.earth = null; so.earthGroup = null; so.groundStationMarker3D = null;
     so.horizonPlane = null; so.horizonRing = null; so.groundStationMarker1D = null;
     so.centerSatMarker = null; so.earthRef = null; so.gridGroup = null; so.arrowGroup = null;
+    so.selectionRing = null;
 }
 
 /**

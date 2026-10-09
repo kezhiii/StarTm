@@ -2,9 +2,10 @@
 import * as THREE from 'three';
 import { parseTimestamp, dateToJD, formatTimestamp, calcGMST } from '../modules/math-utils.js';
 import { placeGroundStationMarker } from '../modules/earth-rotation.js';
+import { THIRD_PERSON_CAMERA_POS } from '../modules/config.js';
 import { interpolateSatellites, updateSatellitesThirdPersonInterp, updateSatellitesFirstPersonInterp, updateSatellitesCenterPersonInterp } from '../modules/interpolation.js';
 import { sendWsCommand as sendWsCmd, updateWsStatus as updateWsSts } from '../core/ws-utils.js';
-import { updateSatellitesThirdPersonWs } from '../modules/views/third-person.js';
+import { updateSatellitesThirdPersonWs, updateThirdPersonDecor } from '../modules/views/third-person.js';
 import { updateSatellitesFirstPersonWs } from '../modules/views/first-person.js';
 import { updateSatellitesCenterPersonWs } from '../modules/views/center-person.js';
 
@@ -49,10 +50,11 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
     const wsState = appState.ws;
     const interpState = appState.interpolation;
     const earthRotationState = appState.earthRotation;
-    const { scene, camera, render } = engine;
+    const { scene, camera, controls, render } = engine;
 
     // 姿态表：attitudeTable[i][satId] = [qx,qy,qz,qw]（J2000→本体），由主界面经桥推送
     let attitudeTable = null;
+    let followTarget = null;   // {idx, dist}：目标跟随时由外部驱动设定
     let attApplied = 0;
     let loopTicks = 0;
 
@@ -86,6 +88,23 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
             obj.quaternion.set(cx, cy, cz, cw);
             attApplied += 1;
         }
+    }
+
+    /** 每帧的驱动动作：姿态、屏幕缩放与选中框。重建或换视角后也要立刻补一次，否则新网格保持 identity 姿态 */
+    function applyDrive() {
+        applyAttitude();
+        if (appState.currentView === 'third') updateThirdPersonDecor(appState.sceneObjects, camera);
+        chaseThirdPerson();
+    }
+
+    /** 目标跟随：相机吊在选中星外侧 dist 处，视线跟着星走 */
+    function chaseThirdPerson() {
+        if (!followTarget || !controls) return;
+        const m = (appState.sceneObjects.satelliteMeshes3D || [])[followTarget.idx];
+        if (!m || !m.visible) return;
+        const outward = m.position.clone().normalize().multiplyScalar(followTarget.dist);
+        camera.position.copy(m.position).add(outward);
+        controls.target.copy(m.position);
     }
 
     /**
@@ -237,6 +256,7 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
             const currentView = appState.currentView;
             if (currentView === 'third') {
                 updateSatellitesThirdPersonInterp(interpData, appState.sceneObjects, appState.interaction, appState);
+                if (csvState.externalMode) applyDrive();
             } else if (currentView === 'first') {
                 updateSatellitesFirstPersonInterp(interpData, appState);
             } else {
@@ -1070,6 +1090,7 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
             const want = !!on;
             if (csvState.externalMode === want) return;
             csvState.externalMode = want;
+            if (want) earthRotationState.speedFactor = 1;
             if (want) {
                 if (csvState.isPlaying) stopCsvPlayback();
                 if (wsState.playbackActive) stopWsPlayback();   // 时钟交给外部页面，WS 播放循环必须停
@@ -1079,7 +1100,12 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
         totalSteps: () => (appState.csv.timeIndices || []).length,
         mode: () => appState.currentMode,
         getStep: () => csvState.currentTimeIdx,
-        getStepIntervalSec: () => csvPlaybackState.frameIntervalSec || 1,
+        getStepIntervalSec: () => {
+            const t = appState.csv.timeIndices || [];
+            if (t.length < 2) return csvPlaybackState.frameIntervalSec || 0;
+            const a = parseTimestamp(t[0]), b = parseTimestamp(t[1]);
+            return frameInterval(t) || csvPlaybackState.frameIntervalSec || 0;
+        },
         getTimestamp: (i) => (appState.csv.timeIndices || [])[i] || null,
         setAttitudeTable: (t) => { attitudeTable = t; },
         hasAttitude: () => !!attitudeTable,
@@ -1098,6 +1124,19 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
             if (a) a.value = lat;
             if (b) b.value = lon;
         },
+        selectSat(satIdx) {
+            appState.sceneObjects.selectedSatIdx = (satIdx == null) ? null : satIdx;
+            updateThirdPersonDecor(appState.sceneObjects, camera);
+        },
+        /** 目标跟随：把相机吊到选中星上方 dist 处，target 跟着星走；null 恢复全局机位 */
+        follow(satIdx, dist) {
+            followTarget = (satIdx == null) ? null : { idx: satIdx, dist: dist || 18 };
+            if (!followTarget) {
+                controls.target.set(0, 0, 0);
+                camera.position.copy(THIRD_PERSON_CAMERA_POS);
+            }
+        },
+        onPick: null,
         setLight(satIdx, on) {
             if (!appState.lightManager) return false;
             appState.lightManager.setLight(satIdx, !!on);
@@ -1118,6 +1157,8 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
                 station: gs ? r3(gs.position.toArray()) : null,
                 stationLL: [+appState.interaction.currentLat.toFixed(4), +appState.interaction.currentLon.toFixed(4)],
                 satCount: (appState.config || {}).satCount,
+                selectedSatIdx: (appState.sceneObjects || {}).selectedSatIdx,
+                cam: camera ? camera.position.toArray().map(v => +v.toFixed(1)) : null,
                 lights: appState.lightManager
                     ? [...appState.lightManager.getAllStates().entries()].filter(([, s]) => s.isOn).map(([i]) => i)
                     : null,
@@ -1148,8 +1189,10 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
             return true;
         },
         setRate(mult) {
+            // 外部驱动时时钟由父页面推进，地球自转只能按“每秒走 mult 个仿真秒”，
+            // 乘帧间隔会让它比仿真时间快 60 倍
             const fis = csvPlaybackState.frameIntervalSec || 60;
-            earthRotationState.speedFactor = mult * fis;
+            earthRotationState.speedFactor = csvState.externalMode ? mult : mult * fis;
         },
         pause() { if (csvState.isPlaying) stopCsvPlayback(); },
         resume() { if (!csvState.isPlaying) startCsvPlayback(false); },
@@ -1157,8 +1200,8 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
             const b = document.getElementById('modeToggle');
             if (b) b.click();
         },
-        rebuildView() { viewManager.switchView(appState.currentView, true); },
-        setView(v) { viewManager.switchView(v); return appState.currentView; }
+        rebuildView() { viewManager.switchView(appState.currentView, true); applyDrive(); },
+        setView(v) { viewManager.switchView(v); applyDrive(); return appState.currentView; }
     };
 
     return {

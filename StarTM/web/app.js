@@ -156,7 +156,7 @@ function switchView(view, force) {
         initThirdPersonSceneMod(appCtx.scene, appCtx.controls, appState);
         appCtx.controls.enabled = true;
         appCtx.controls.autoRotate = false;
-        appCtx.camera.position.set(150, 75, 150);
+        appCtx.camera.position.copy(THIRD_PERSON_CAMERA_POS);
         appCtx.controls.target.set(0, 0, 0);
         appCtx.camera.up.set(0, 1, 0);
         appCtx.controls.update();
@@ -376,7 +376,7 @@ async function init() {
             switchView,
             getCurrentView: () => appState.currentView
         };
-        const engine = { scene: appCtx.scene, camera: appCtx.camera, render: () => appCtx.render() };
+        const engine = { scene: appCtx.scene, camera: appCtx.camera, controls: appCtx.controls, render: () => appCtx.render() };
         const playbackManager = createPlaybackManager(appState, engine, viewManager, modules, cameraPanOffset);
 
         // 4. 初始化输入控制

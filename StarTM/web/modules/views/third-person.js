@@ -1,9 +1,9 @@
 // ======================== 第三视角模块 ========================
 import * as THREE from 'three';
-import { DEG, RE_3D, SAT_SCALE, SAT_VISUAL_SCALE, sharedResources } from '../config.js';
+import { DEG, RE_3D, SAT_SCALE, sharedResources } from '../config.js';
 import { formatTimestamp, parseTimestamp, dateToJD, calcGMST } from '../math-utils.js';
 import { initMoon } from '../moon-orbit.js';
-import { buildSatelliteMesh, buildSatLabel, buildTextSprite } from '../sat-model.js';
+import { buildSatelliteMesh, buildSatLabel, buildTextSprite, buildSelectionRing, applyScreenScale, placeSelectionRing } from '../sat-model.js';
 import { buildGroundStationMarker, placeGroundStationMarker } from '../earth-rotation.js';
 import { clearSceneObjects } from '../../core/scene-utils.js';
 import { createLogger } from '../../core/logger.js';
@@ -12,6 +12,20 @@ const { EARTH_GEOM_3RD, EARTH_WIRE_MAT,
         SAT_MAT_3RD, ORBIT_RING_MAT } = sharedResources;
 
 const log = createLogger('THIRD-PERSON');
+let thirdCam = null;   // 本视角的相机，用于把卫星缩放到恒定屏幅与选中框朝向
+
+/**
+ * 卫星按相机距离缩放到恒定屏幅，并把选中框摆到当前选中的目标上。
+ * 三条更新路径（CSV / WS / 插值）与外部驱动循环都调用它。
+ */
+export function updateThirdPersonDecor(sceneObjects, camera) {
+    const cam = camera || thirdCam;
+    const meshes = sceneObjects.satelliteMeshes3D;
+    if (!cam || !meshes || !meshes.length) return;
+    applyScreenScale(meshes, cam);
+    const idx = sceneObjects.selectedSatIdx;
+    placeSelectionRing(sceneObjects.selectionRing, idx == null ? null : meshes[idx], cam);
+}
 
 /**
  * 当前帧对应的 GMST（无数据时为 0）
@@ -92,15 +106,18 @@ export function initThirdPersonScene(scene, controls, appState) {
     sceneObjects.earthGroup.add(sceneObjects.groundStationMarker3D);
     placeGroundStationMarker(sceneObjects.groundStationMarker3D, appState.interaction.currentLat, appState.interaction.currentLon, currentGmst(appState));
 
+    thirdCam = appState.camera;
+    sceneObjects.selectionRing = buildSelectionRing();
+    scene.add(sceneObjects.selectionRing);
+
     // 卫星网格：CSV/外部驱动按数据里的星数建，WS 模式按后端星座数
     const csvSats = (appState.currentMode === 'csv' && csv.satelliteData.length)
         ? csv.satelliteData[0].sats : null;
     const satCount = csvSats ? csvSats.length : (appState.config?.satCount || 0);
     sceneObjects.satelliteMeshes3D = [];
     for (let i = 0; i < satCount; i++) {
-        // 克隆材质使每颗星的着色独立；真实尺寸在此比例下不可见，按可读尺度放大
+        // 克隆材质使每颗星的着色独立；大小由 updateThirdPersonDecor 按相机距离逐帧给
         const mesh = buildSatelliteMesh(SAT_MAT_3RD.clone());
-        mesh.scale.setScalar(SAT_VISUAL_SCALE);
         mesh.userData.satIdx = i;
         // 编队间距 1 km，在此比例下三星重合为一点，只给一个组标签
         if (csvSats && i === 0) mesh.add(buildSatLabel('编队 TM0S1-3', { scale: 4, offset: 3.4 }));
@@ -187,6 +204,7 @@ export function updateSatellitesThirdPerson(timeIdx, satelliteData, sceneObjects
     if (lightManager) {
         lightManager.applyAll();
     }
+    updateThirdPersonDecor(sceneObjects);
 }
 
 /**
@@ -221,4 +239,5 @@ export function updateSatellitesThirdPersonWs(stepData, sceneObjects, interactio
     if (lightManager) {
         lightManager.applyAll();
     }
+    updateThirdPersonDecor(sceneObjects);
 }

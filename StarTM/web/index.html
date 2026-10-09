@@ -323,7 +323,8 @@
         }
     </script>
     <style>
-        body.bare > *:not(#canvasContainer) { display: none !important; }
+        /* 悬停拾取的提示框也挂在 body 上，bare 模式要留着它 */
+        body.bare > *:not(#canvasContainer):not(#satellite-tooltip) { display: none !important; }
         body.bare, body.bare #canvasContainer { width: 100vw; height: 100vh; margin: 0; overflow: hidden; }
     </style>
 </body>

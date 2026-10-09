@@ -87,6 +87,7 @@ export function initCenterPersonScene(scene, controls, appState) {
 
     sceneObjects.centerSatMarker = buildSatelliteMesh(CENTER_SAT_MAT.clone());
     sceneObjects.centerSatMarker.scale.setScalar(modelScale);
+    sceneObjects.centerSatMarker.userData.satIdx = 0;   // 悬停/点选按数组下标取数，主星即数据第 0 项
     if (csvSats) sceneObjects.centerSatMarker.add(buildSatLabel(`TM0S${csvSats[0].sat_id}`, { scale: 3.2, offset: 9 }));
     scene.add(sceneObjects.centerSatMarker);
 

@@ -6,11 +6,9 @@ export const RE_KM = 6378.137;
 export const RE_3D = 50;
 export const SAT_SCALE = RE_3D / RE_KM;
 export const SAT_SCALE_CENTER = 1;
-// 第三视角中真实尺寸（≈2 m / 6378 km）不可分辨，按可读尺度放大约 4 倍
-export const SAT_VISUAL_SCALE = 4;
 
-// 相机位置常量
-export const THIRD_PERSON_CAMERA_POS = new THREE.Vector3(RE_3D * 3, RE_3D * 1.5, RE_3D * 3);
+// 相机位置常量（第三视角以地球为主视觉，机位拉近到 1.55 倍地心距）
+export const THIRD_PERSON_CAMERA_POS = new THREE.Vector3(RE_3D * 1.55, RE_3D * 0.55, RE_3D * 1.55);
 export const THIRD_PERSON_CAMERA_TARGET = new THREE.Vector3(0, 0, 0);
 export const FIRST_PERSON_CAMERA_POS = new THREE.Vector3(0, 0, 0);
 export const FIRST_PERSON_CAMERA_TARGET = new THREE.Vector3(0, 0, 100);
