@@ -427,6 +427,7 @@ events_df.to_csv(f"{OUT}/events.csv", index=False, float_format="%.9g")
 
 common_runs = runs(common)
 meta = {"rows_per_sat": int(n_pts), "sats": 3, "edge0_km": float(e0),
+        "station": {"name": "合肥", "lat_deg": HEFEI[1], "lon_deg": HEFEI[0], "alt_km": HEFEI[2]},
         "sun_inc_nominal_deg": [round(float(nom.min()), 3), round(float(nom.max()), 3)],
         "eclipse_samples": int(ecl_flag.sum()),
         "common_windows_s": [[float(a_), float(b_)] for a_, b_ in common_runs],

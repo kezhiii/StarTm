@@ -4,6 +4,7 @@ const cache = {};
 let stepSec = 60;   // 预览 60 s；全量 1 s 时由 main 调 setStepSec(1)
 
 export function setStepSec(s) { stepSec = s; }
+export function getStepSec() { return stepSec; }
 
 async function fetchText(url) {
     const res = await fetch(url);
@@ -14,7 +15,7 @@ async function fetchText(url) {
 export async function loadCategory(name) {
     if (cache[name]) return cache[name];
     const txt = await fetchText(`/sim-data/preview/${name}.csv`);
-    const lines = txt.split('\n').filter(l => l && !l.startsWith('#'));
+    const lines = txt.split(/\r?\n/).filter(l => l && !l.startsWith('#'));
     const head = lines[0].split(',').map(s => s.trim());
     const perSat = head.includes('sat_id');
     const rows = lines.slice(1).map(l => {
