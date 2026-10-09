@@ -23,6 +23,23 @@ function waitBridge(tries = 0) {
 
 let bridge = null;
 
+// 拉取姿态表：attitude.csv 的 q_j2b 列，table[epochIdx][satId] = [qx,qy,qz,qw]
+async function loadAttitude() {
+    const res = await fetch('/sim-data/preview/attitude.csv');
+    const lines = (await res.text()).split('\n').filter(l => l && !l.startsWith('#'));
+    const table = [];
+    let satId = null; let epoch = 0;
+    for (const line of lines) {
+        const v = line.split(',');
+        if (v[0] !== satId) { satId = v[0]; epoch = 0; }
+        const sat = Number(v[0]);
+        table[epoch] = table[epoch] || {};
+        table[epoch][sat] = [Number(v[3]), Number(v[4]), Number(v[5]), Number(v[6])];
+        epoch += 1;
+    }
+    return table;
+}
+
 function refreshMeta() {
     const st = getState();
     st.totalSteps = bridge.totalSteps();
@@ -63,6 +80,15 @@ $('btnAttach').onclick = async () => {
     }
     if (!bridge.totalSteps()) { $('status').textContent = '切换失败：StarTM 数据为空'; return; }
     bridge.setExternalMode(true);
+    try {
+        const table = await loadAttitude();
+        bridge.setAttitudeTable(table);
+        $('status').textContent = '外部驱动已接管：时钟归本页面（含姿态）';
+    } catch (e) {
+        $('status').textContent = '外部驱动已接管（姿态表加载失败：' + e.message + '）';
+        return;
+    }
+    bridge.rebuildView();
     refreshMeta();
     bridge.setStep(0);
     patch({ attached: true, simSeconds: 0, currentStep: 0, playing: false });

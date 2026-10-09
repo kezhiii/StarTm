@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { DEG, SAT_SCALE_CENTER, MAX_PAN_DISTANCE, sharedResources } from '../config.js';
 import { parseTimestamp, dateToJD, calcGMST, formatTimestamp } from '../math-utils.js';
+import { buildSatelliteMesh } from '../sat-model.js';
 
 const { EARTH_CENTER_GEOM, CENTER_SAT_GEOM, CENTER_SAT_MAT, DEPUTY_SAT_GEOM, DEPUTY_SAT_MAT } = sharedResources;
 
@@ -84,8 +85,8 @@ export function initCenterPersonScene(scene, controls, appState) {
     const satCount = appState.config?.satCount || 0;
     const deputyCount = satCount > 0 ? satCount - 1 : 0; // 从星数 = 总数 - 主星
     for (let i = 0; i < deputyCount; i++) {
-        // 修复：克隆材质，使每颗卫星的颜色独立
-        const mesh = new THREE.Mesh(DEPUTY_SAT_GEOM, DEPUTY_SAT_MAT.clone());
+        // 修复：克隆材质，使每颗卫星的颜色独立；模型换为箱体+双翼（姿态可视化需要）
+        const mesh = buildSatelliteMesh(DEPUTY_SAT_MAT.clone());
         mesh.userData.satIdx = i + 1;
         mesh.visible = false;
         scene.add(mesh);

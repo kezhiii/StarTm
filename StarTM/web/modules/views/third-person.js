@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { DEG, RE_3D, SAT_SCALE, sharedResources } from '../config.js';
 import { formatTimestamp } from '../math-utils.js';
 import { initMoon } from '../moon-orbit.js';
+import { buildSatelliteMesh } from '../sat-model.js';
 import { clearSceneObjects } from '../../core/scene-utils.js';
 import { createLogger } from '../../core/logger.js';
 
@@ -79,8 +80,8 @@ export function initThirdPersonScene(scene, controls, appState) {
     const satCount = appState.config?.satCount || 0;
     sceneObjects.satelliteMeshes3D = [];
     for (let i = 0; i < satCount; i++) {
-        // 修复：克隆材质，使每颗卫星的颜色独立
-        const mesh = new THREE.Mesh(SAT_GEOM_3RD, SAT_MAT_3RD.clone());
+        // 修复：克隆材质，使每颗卫星的颜色独立；模型换为箱体+双翼（姿态可视化需要）
+        const mesh = buildSatelliteMesh(SAT_MAT_3RD.clone());
         mesh.userData.satIdx = i;
         mesh.visible = false;
         scene.add(mesh);

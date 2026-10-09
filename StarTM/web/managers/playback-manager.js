@@ -38,6 +38,42 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
     const earthRotationState = appState.earthRotation;
     const { scene, camera, render } = engine;
 
+    // 姿态表：attitudeTable[i][satId] = [qx,qy,qz,qw]（J2000→本体），由主界面经桥推送
+    let attitudeTable = null;
+    let attApplied = 0;
+    let loopTicks = 0;
+
+    // 把 J2000→本体 四元数转成场景姿态：场景轴 = ECI 经 (x,y,z)→(x,z,−y) 置换（绕 X 轴 −90°）
+    // mesh.quaternion = q_perm ⊗ conj(q_j2b)
+    const QP_S = Math.SQRT1_2, QP_C = Math.SQRT1_2; // q_perm = (−s, 0, 0, c)
+    function applyAttitude() {
+        if (!attitudeTable) return;
+        const i = csvState.currentTimeIdx;
+        const per = attitudeTable[i];
+        if (!per) return;
+        let meshes = null; let base = 1; // 网格下标 ↔ 星号：third 从 0 计、center 从 1 计，数据 sat_id 从 1 起
+        if (appState.currentView === 'third') {
+            meshes = appState.sceneObjects.satelliteMeshes3D;
+        } else if (appState.currentView === 'center') {
+            meshes = appState.sceneObjects.satelliteMeshesCenter;
+        } else {
+            return;
+        }
+        if (!meshes) return;
+        for (let m = 0; m < meshes.length; m++) {
+            const mesh = meshes[m];
+            if (!mesh || !mesh.visible) continue;
+            const q = per[m + base];
+            if (!q) continue;
+            const cx = -QP_C * q[0] - QP_S * q[3];
+            const cy = -QP_C * q[1] - QP_S * q[2];
+            const cz = -QP_C * q[2] + QP_S * q[1];
+            const cw = QP_C * q[3] - QP_S * q[0];
+            mesh.quaternion.set(cx, cy, cz, cw);
+            attApplied += 1;
+        }
+    }
+
     /**
      * 启动 CSV 播放
      */
@@ -198,8 +234,10 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
             } else {
                 updateSatellitesCenterPersonInterp(interpData, appState, camera, cameraPanOffset, modules.updateCenterPersonCamera);
             }
+            if (csvState.externalMode) applyAttitude();
 
             csvState.playbackAnimId = requestAnimationFrame(playbackLoop);
+            loopTicks += 1;
         }
 
         csvState.playbackAnimId = requestAnimationFrame(playbackLoop);
@@ -1045,6 +1083,19 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
         getStep: () => csvState.currentTimeIdx,
         getStepIntervalSec: () => csvPlaybackState.frameIntervalSec || 1,
         getTimestamp: (i) => (appState.csv.timeIndices || [])[i] || null,
+        setAttitudeTable: (t) => { attitudeTable = t; },
+        hasAttitude: () => !!attitudeTable,
+        __probe: () => {
+            const meshes = appState.currentView === 'third'
+                ? appState.sceneObjects.satelliteMeshes3D
+                : appState.sceneObjects.satelliteMeshesCenter;
+            return {
+                view: appState.currentView,
+                attApplied, loopTicks,
+                playing: csvState.isPlaying,
+                meshes: (meshes || []).map(m => ({ satIdx: m.userData.satIdx, vis: m.visible, q: m.quaternion.toArray(), p: m.position.toArray() })),
+            };
+        },
         setStep(i) {
             const data = appState.csv.satelliteData;
             const times = appState.csv.timeIndices;
@@ -1076,6 +1127,12 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
         toggleCsvMode() {
             const b = document.getElementById('modeToggle');
             if (b) b.click();
+        },
+        rebuildView() {
+            // 切 CSV 后网格仍是 WS 星座的旧构建，强制按当前数据重建视角
+            const btns = [...document.querySelectorAll('button,div,span')]
+                .filter(x => x.children.length === 0 && /轨道/.test(x.textContent));
+            if (btns[0]) btns[0].click();
         }
     };
 
