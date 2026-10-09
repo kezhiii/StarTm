@@ -171,7 +171,6 @@ export function createLightManager(getSceneObjectsFn) {
                 // 点亮：对地发光面发暖光，本体按可见性着色
                 if (face) {
                     face.material.color.setHex(0xfff0b8);
-                    face.material.opacity = 1;
                 }
                 body.material.emissive.setHex(LIGHT_CONFIG.emissiveColor);
                 body.material.emissiveIntensity = LIGHT_CONFIG.emissiveIntensity;

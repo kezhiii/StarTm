@@ -47,7 +47,8 @@ function onMouseMove(event, sceneObjects, camera, appState) {
     const intersects = raycaster.intersectObjects(tooltipMeshes);
     if (intersects.length > 0) {
         const hitObj = intersects[0].object;
-        const satIdx = hitObj.userData.satIdx;
+        // 组合模型（箱体+翼+发光面）命中到的是子网格，星号挂在父组上
+        const satIdx = hitObj.userData.satIdx ?? hitObj.parent?.userData.satIdx;
         if (satIdx === undefined) return;
         let data = null;
         if (appState.currentMode === 'ws' && appState.ws.lastStepData) {
