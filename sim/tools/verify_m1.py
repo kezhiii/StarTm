@@ -44,7 +44,7 @@ out = {
     "判定": None,
 }
 ok = (rows == 259203 and len(timestamps) == 86401 and data.meta.sat_count == 3
-      and abs(d12[0] - 1.0) < 1e-3 and qn_max_dev < 1e-9
+      and 0.5 < d12[0] < 15.0 and qn_max_dev < 1e-9
       and timestamps == sorted(timestamps) and sats == [1, 2, 3])
 out["判定"] = "PASS" if ok else "FAIL"
 with open("sim-data/verify_m1.json", "w", encoding="utf-8") as f:

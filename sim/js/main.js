@@ -1,6 +1,6 @@
 import { getState, patch } from './store.js';
 import { initPanels, render as renderPanels, setStateSource } from './panels.js';
-import { setStepSec } from './loader.js';
+import { setStepSec, loadCategory } from './loader.js';
 
 const displayCfg = await (await fetch('/sim/config/display.json')).json();
 
@@ -102,6 +102,8 @@ $('btnAttach').onclick = async () => {
         await initPanels(displayCfg);
         setStateSource(() => getState().simSeconds);
         renderPanels(0);
+        const ti = await loadCategory('time_ident');
+        $('kvVer').textContent = ti.rows[0] ? ti.rows[0].param_ver : '--';
     } catch (e) {
         console.warn('参数表初始化失败（不阻塞时钟）:', e);
     }

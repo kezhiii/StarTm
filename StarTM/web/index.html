@@ -315,5 +315,16 @@
     </script>
 
     <script type="module" src="app.js"></script>
+    <script>
+        // bare 模式：被飞行模拟仿真系统主界面以 iframe 内嵌时隐藏自带 UI，只留地月星空卫星画布。
+        // 完整终端仍可通过 /web/（不带参数）访问。
+        if (new URLSearchParams(location.search).has('bare')) {
+            document.addEventListener('DOMContentLoaded', () => document.body.classList.add('bare'));
+        }
+    </script>
+    <style>
+        body.bare > *:not(#canvasContainer) { display: none !important; }
+        body.bare, body.bare #canvasContainer { width: 100vw; height: 100vh; margin: 0; overflow: hidden; }
+    </style>
 </body>
 </html>

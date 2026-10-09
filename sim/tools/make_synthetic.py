@@ -39,51 +39,80 @@ def utcg(i):
     return t.iso[:19]
 
 t_start = time.time()
-print("1/7 轨道：参考中心解析圆轨道 + 三星两体传播")
-grid = np.arange(0, DUR + 1, dtype=float)
-n_pts = grid.size
-uu = N_ORB * grid
-cn, sn, ci, si = math.cos(RAAN), math.sin(RAAN), math.cos(INC), math.sin(INC)
-rc = np.stack([A*(cn*np.cos(uu) - sn*np.sin(uu)*ci),
-               A*(sn*np.cos(uu) + cn*np.sin(uu)*ci),
-               A*(np.sin(uu)*si)])
-vc = np.stack([A*(-cn*np.sin(uu) - sn*np.cos(uu)*ci)*N_ORB,
-               A*(-sn*np.sin(uu) + cn*np.cos(uu)*ci)*N_ORB,
-               A*(np.cos(uu)*si)*N_ORB])
+print("1/7 轨道：读取杨宏俊交付的 STK J2000 瞬时根数（sim-data/orebit elements，1 s 采样）并闭式重建位置速度")
+OE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "sim-data", "orebit elements")
+MONTH = {"Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
+         "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12}
+
+def parse_oe(path):
+    t, a_, e_, i_, O_, w_, nu_ = [], [], [], [], [], [], []
+    for line in open(path, encoding="utf-8"):
+        parts = line.split()
+        if len(parts) != 11 or not parts[0].isdigit():
+            continue
+        hh, mm, ss = parts[3].split(":")
+        t.append(f"{parts[2]}-{MONTH[parts[1]]:02d}-{int(parts[0]):02d} "
+                 f"{int(hh):02d}:{int(mm):02d}:{int(float(ss)):02d}")
+        a_.append(float(parts[4])); e_.append(float(parts[5])); i_.append(math.radians(float(parts[6])))
+        O_.append(math.radians(float(parts[7]))); w_.append(math.radians(float(parts[8])))
+        nu_.append(math.radians(float(parts[9])))
+    return (np.array(t), np.array(a_), np.array(e_), np.array(i_), np.array(O_), np.array(w_), np.array(nu_))
+
+def oe_to_rv(a_, e_, i_, O_, w_, nu_):
+    """瞬时根数闭式重建 J2000 位置/速度。位置由根数唯一确定（与 HPOP 一致），
+    速度解析式不含摄动项，近圆小 e 下误差可忽略（显示用途）。"""
+    p = a_ * (1 - e_ * e_)
+    r = p / (1 + e_ * np.cos(nu_))
+    vm = np.sqrt(MU / p)
+    cO, sO = np.cos(O_), np.sin(O_)
+    ci, si = np.cos(i_), np.sin(i_)
+    cw, sw = np.cos(w_), np.sin(w_)
+    cn, sn = np.cos(nu_), np.sin(nu_)
+    Ph0 = cO*cw - sO*sw*ci; Ph1 = sO*cw + cO*sw*ci; Ph2 = sw*si
+    Qh0 = -cO*sw - sO*cw*ci; Qh1 = -sO*sw + cO*cw*ci; Qh2 = cw*si
+    X = Ph0*r*cn + Qh0*r*sn
+    Y = Ph1*r*cn + Qh1*r*sn
+    Z = Ph2*r*cn + Qh2*r*sn
+    VX = Ph0*vm*(-sn) + Qh0*vm*(e_ + cn)
+    VY = Ph1*vm*(-sn) + Qh1*vm*(e_ + cn)
+    VZ = Ph2*vm*(-sn) + Qh2*vm*(e_ + cn)
+    return np.stack([X, Y, Z]), np.stack([VX, VY, VZ])
+
+grid = None
+sat_r = {}; sat_v = {}
+oe_meta = {}
+for k in (1, 2, 3):
+    t_, a_, e_, i_, O_, w_, nu_ = parse_oe(os.path.join(OE_DIR, f"{SAT[k]}_Classical_Orbit_Elements.txt"))
+    if grid is None:
+        grid = np.arange(len(t_), dtype=float)
+        n_pts = grid.size
+        DUR = n_pts - 1
+    assert len(t_) == n_pts, f"{SAT[k]} 行数 {len(t_)} != {n_pts}"
+    sat_r[k], sat_v[k] = oe_to_rv(a_, e_, i_, O_, w_, nu_)
+    oe_meta[SAT[k]] = {"a0": float(a_[0]), "e0": float(e_[0]),
+                       "inc0_deg": round(math.degrees(i_[0]), 4), "raan0_deg": round(math.degrees(O_[0]), 4),
+                       "argp0_deg": round(math.degrees(w_[0]), 3), "nu0_deg": round(math.degrees(nu_[0]), 3)}
+    print(f"   {SAT[k]} 根数 {n_pts} 行，a0={oe_meta[SAT[k]]['a0']} km")
+
+rc = (sat_r[1] + sat_r[2] + sat_r[3]) / 3.0          # 几何中心代参考中心（参考中心列未交付，见清单）
+vc = (sat_v[1] + sat_v[2] + sat_v[3]) / 3.0
 
 Rhat = rc / np.linalg.norm(rc, axis=0)
 hvec = np.cross(rc, vc, axis=0)
 Nhat = hvec / np.linalg.norm(hvec, axis=0)
 That = np.cross(Nhat, Rhat, axis=0)
 
-def twobody(t, s):
-    r = s[:3]
-    return np.concatenate([s[3:], -MU * r / np.linalg.norm(r)**3])
-
-R0 = rc[:, 0] / np.linalg.norm(rc[:, 0])
-h0 = np.cross(rc[:, 0], vc[:, 0]); N0 = h0 / np.linalg.norm(h0)
-T0_ = np.cross(N0, R0)
-B0 = np.stack([R0, T0_, N0], axis=1)                  # t=0 的 RTN→J2000
-
-sat_r = {}; sat_v = {}
-for k in (1, 2, 3):
-    p = math.radians(PHASES[k-1])
-    d = np.array([0.0, R_CIRC*math.cos(p), R_CIRC*math.sin(p)])
-    s0 = np.concatenate([rc[:, 0] + B0 @ d, vc[:, 0]])
-    sol = solve_ivp(twobody, (0, DUR), s0, t_eval=grid, method="DOP853", rtol=1e-12, atol=1e-9)
-    assert sol.success
-    sat_r[k], sat_v[k] = sol.y[:3], sol.y[3:]
-    print(f"   {SAT[k]} 完成")
-
-def A_r2j0(d):  # 保留旧接口
-    return B0 @ d
-
-print("2/7 自检：中心轨道守恒与三星初始三角形")
-assert np.allclose(np.linalg.norm(rc, axis=0), A, atol=1e-9)
-assert np.allclose(np.linalg.norm(vc, axis=0), math.sqrt(MU/A), atol=1e-12)
+print("2/7 自检：真实根数下的初始几何")
+r_norm = np.linalg.norm(rc, axis=0)
+assert np.all((r_norm > 6900) & (r_norm < 7050)), f"中心地心距异常 {r_norm[0]}"
 e0 = np.linalg.norm(sat_r[1][:, 0] - sat_r[2][:, 0])
-assert abs(e0 - SIDE) < 1e-9, e0
-print(f"   初始边长 {e0:.12f} km")
+e1 = np.linalg.norm(sat_r[2][:, 0] - sat_r[3][:, 0])
+e2 = np.linalg.norm(sat_r[3][:, 0] - sat_r[1][:, 0])
+assert max(e0, e1, e2) < 15.0, "初始边长超过 15 km，与任何一版口径都不符"
+print(f"   实测初始边长: {e0:.4f} / {e1:.4f} / {e2:.4f} km（第3章标称 1 km 等边，表4-3.1 写约 10 km 同轨沿轨）")
+print(f"   初始纬度幅角 u: S1={oe_meta['TM0S1']['argp0_deg']+oe_meta['TM0S1']['nu0_deg']:.2f}°, "
+      f"S2={oe_meta['TM0S2']['argp0_deg']+oe_meta['TM0S2']['nu0_deg']:.2f}°, "
+      f"S3={oe_meta['TM0S3']['argp0_deg']+oe_meta['TM0S3']['nu0_deg']:.2f}°")
 
 print("3/7 RTN 相对状态、构型几何、瞬时根数")
 B = np.stack([Rhat, That, Nhat], axis=1)              # (3,3,n) 列=R,T,N，RTN→J2000
@@ -330,12 +359,13 @@ write("formation_geom.csv",
       ["s", "-", "km", "km", "km", "km", "km", "km", "deg", "km", "km", "km"])
 
 a_parts = []
+q_rt2b_m = q_mul(qm, np.tile(q_rtn2b, (n_pts, 1)))  # RTN→本体含机动：机体绕 +Y_B 转动
 for k in (1, 2, 3):
     om = np.zeros((n_pts, 3)); om[:, 1] = N_ORB
     om[mask | (grid > MAN_T1), 1] += math.radians(MAN_DEG) / (MAN_T1 - MAN_T0)
     a_parts.append(pd.DataFrame({"sat_id": k, "rel_s": grid.astype(np.int64), "utcg": tstr,
         "q_j2b_x": q_j2b_m[:, 0], "q_j2b_y": q_j2b_m[:, 1], "q_j2b_z": q_j2b_m[:, 2], "q_j2b_w": q_j2b_m[:, 3],
-        "q_rtn2b_x": q_rtn2b[0], "q_rtn2b_y": q_rtn2b[1], "q_rtn2b_z": q_rtn2b[2], "q_rtn2b_w": q_rtn2b[3],
+        "q_rtn2b_x": q_rt2b_m[:, 0], "q_rtn2b_y": q_rt2b_m[:, 1], "q_rtn2b_z": q_rt2b_m[:, 2], "q_rtn2b_w": q_rt2b_m[:, 3],
         "wx": om[:, 0], "wy": om[:, 1], "wz": om[:, 2],
         "att_mode": "nadir", "stable": 1}))
 write("attitude.csv", pd.concat(a_parts),
@@ -401,6 +431,7 @@ meta = {"rows_per_sat": int(n_pts), "sats": 3, "edge0_km": float(e0),
         "eclipse_samples": int(ecl_flag.sum()),
         "common_windows_s": [[float(a_), float(b_)] for a_, b_ in common_runs],
         "generation_s": round(time.time() - t_start, 1),
-        "note": "两体自由漂移合成数据，非 HPOP/非 NaturalHCW；事件与显示窗口由本数据集自洽生成，非报告数值"}
+        "note": "轨道=杨宏俊交付的 STK J2000 瞬时根数闭式重建（位置精确、速度近似）；姿态/太阳/显示=合成；参考中心用三星几何中心代替（参考中心列未交付）；事件与显示窗口由本数据集自洽生成",
+        "oe_input": oe_meta}
 json.dump(meta, open(f"{OUT}/meta.json", "w", encoding="utf-8"), ensure_ascii=False, indent=2)
 print(json.dumps(meta, ensure_ascii=False, indent=2))
