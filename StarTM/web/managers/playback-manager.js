@@ -64,6 +64,7 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
         const intervalMs = intervalMsOverride || (speedEl ? parseInt(speedEl.value, 10) : 1000 / 30);
         const framesPerSec = 1000 / intervalMs;
         earthRotationState.speedFactor = framesPerSec * frameIntervalSec;
+        csvPlaybackState.frameIntervalSec = frameIntervalSec;
 
         DBG.log(`CSV 播放启动: resetState=${resetState}, 当前时间索引=${csvState.currentTimeIdx}`);
 
@@ -146,6 +147,7 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
 
             while (accumulator >= intervalMs) {
                 accumulator -= intervalMs;
+                if (csvState.externalMode) break; // 外部驱动模式：推进由主系统调 setStep，本循环只渲染
                 if (csvState.currentTimeIdx >= csvState.endIdx) {
                     csvState.currentTimeIdx = csvState.startIdx;
                     // 关键修复：时间索引回绕时，重置地球自转参数到初始时间
@@ -179,7 +181,7 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
             csvPlaybackState.lastFrameTime = lastFrameTime;
             csvPlaybackState.accumulator = accumulator;
 
-            const progress = accumulator / intervalMs;
+            const progress = csvState.externalMode ? 0 : accumulator / intervalMs;
             const interpData = interpolateSatellites(
                 interpState.prevFrameData,
                 interpState.currFrameData,
@@ -271,6 +273,7 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
         const intervalMs = speedEl ? parseInt(speedEl.value, 10) : 1000 / 30;
         const framesPerSec = 1000 / intervalMs;
         earthRotationState.speedFactor = framesPerSec * frameIntervalSec;
+        csvPlaybackState.frameIntervalSec = frameIntervalSec;
 
         const d = parseTimestamp(groupData.timestamp);
         const newStartJD = dateToJD(d.year, d.month, d.day, d.hour, d.minute, d.second);
@@ -1024,6 +1027,57 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
     function isPlaying() {
         return wsState.playbackActive || csvState.isPlaying;
     }
+
+    // —— 外部驱动桥：飞行模拟仿真系统主界面经同源 iframe 调用（ADR-0002） ——
+    window.__simbridge = {
+        version: 1,
+        isExternal: () => !!csvState.externalMode,
+        setExternalMode(on) {
+            const want = !!on;
+            if (csvState.externalMode === want) return;
+            csvState.externalMode = want;
+            if (want) {
+                if (csvState.isPlaying) stopCsvPlayback();
+                startCsvPlayback(false); // 只渲染不自行推进
+            }
+        },
+        totalSteps: () => (appState.csv.timeIndices || []).length,
+        getStep: () => csvState.currentTimeIdx,
+        getStepIntervalSec: () => csvPlaybackState.frameIntervalSec || 1,
+        getTimestamp: (i) => (appState.csv.timeIndices || [])[i] || null,
+        setStep(i) {
+            const data = appState.csv.satelliteData;
+            const times = appState.csv.timeIndices;
+            if (!data || !times || i < 0 || i >= times.length) return false;
+            csvState.currentTimeIdx = i;
+            if (!csvState.isPlaying) startCsvPlayback(false);
+            const g = data[i];
+            if (g) {
+                const arr = g.sats.map(sat => [g.timestamp, sat.sat_id, sat.a, sat.e, sat.i, sat.OMG, sat.omg, sat.f,
+                    sat.X, sat.Y, sat.Z, sat.Vx, sat.Vy, sat.Vz]);
+                interpState.prevFrameData = arr;
+                interpState.currFrameData = arr;
+                const d = parseTimestamp(g.timestamp);
+                earthRotationState.startJD = dateToJD(d.year, d.month, d.day, d.hour, d.minute, d.second);
+                earthRotationState.startTime = performance.now();
+            }
+            const timeSlider = document.getElementById('timeSlider');
+            if (timeSlider) timeSlider.value = i;
+            const bar = document.getElementById('time-bar');
+            if (bar) bar.style.width = (times.length > 1 ? (i / (times.length - 1)) * 100 : 0) + '%';
+            return true;
+        },
+        setRate(mult) {
+            const fis = csvPlaybackState.frameIntervalSec || 60;
+            earthRotationState.speedFactor = mult * fis;
+        },
+        pause() { if (csvState.isPlaying) stopCsvPlayback(); },
+        resume() { if (!csvState.isPlaying) startCsvPlayback(false); },
+        toggleCsvMode() {
+            const b = document.getElementById('modeToggle');
+            if (b) b.click();
+        }
+    };
 
     return {
         startCsvPlayback,

@@ -110,6 +110,24 @@ def create_app(
             name="output",
         )
 
+    # sim 目录（飞行模拟仿真系统主界面）
+    sim_path = Path("../sim")
+    if sim_path.exists():
+        app.mount(
+            "/sim",
+            StaticFiles(directory=str(sim_path), html=True),
+            name="sim",
+        )
+
+    # sim-data 目录（飞行模拟仿真系统数据文件，三类自描述 CSV）
+    simdata_path = Path("../sim-data")
+    if simdata_path.exists():
+        app.mount(
+            "/sim-data",
+            StaticFiles(directory=str(simdata_path)),
+            name="sim-data",
+        )
+
     # 根路径重定向到前端页面
     @app.get("/")
     async def root():

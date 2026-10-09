@@ -17,7 +17,6 @@ router = APIRouter(prefix="/api", tags=["csv"])
 async def get_csv_data(
     format: str = "compact",
     csv_service: CsvService = Depends(get_csv_service),
-    response: Response = None,
 ):
     """获取完整 CSV 数据"""
     if not csv_service.is_loaded:
@@ -34,11 +33,13 @@ async def get_csv_data(
     json_bytes = csv_service.compress_json(data)
     is_compressed = len(json_bytes) != len(data)
 
+    # 注意：返回新建 Response 时，注入的 response 参数上设置的头会被丢弃，
+    # 必须把头放进返回值；否则浏览器把 gzip 字节当 JSON，前端只能走 test_1 兜底
+    headers = {"Content-Type": "application/json"}
     if is_compressed:
-        response.headers["Content-Encoding"] = "gzip"
+        headers["Content-Encoding"] = "gzip"
 
-    response.headers["Content-Type"] = "application/json"
-    return Response(content=json_bytes, media_type="application/json")
+    return Response(content=json_bytes, media_type="application/json", headers=headers)
 
 
 @router.get("/csv-info")

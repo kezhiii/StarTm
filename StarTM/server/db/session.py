@@ -49,14 +49,18 @@ def init_engine(database_url: Optional[str] = None) -> None:
     global _engine, _session_factory
 
     url = database_url or get_database_url()
-    _engine = create_async_engine(
-        url,
-        echo=False,
-        pool_size=5,
-        max_overflow=10,
-        pool_recycle=3600,
-        pool_pre_ping=True,
-    )
+    if url.startswith("sqlite"):
+        # aiosqlite 不接受 MySQL 的连接池参数（实测抛 TypeError），且单文件库无需池化
+        _engine = create_async_engine(url, echo=False)
+    else:
+        _engine = create_async_engine(
+            url,
+            echo=False,
+            pool_size=5,
+            max_overflow=10,
+            pool_recycle=3600,
+            pool_pre_ping=True,
+        )
     _session_factory = async_sessionmaker(
         bind=_engine,
         class_=AsyncSession,
