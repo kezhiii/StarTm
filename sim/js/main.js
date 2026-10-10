@@ -1,6 +1,6 @@
-import { getState, patch } from './store.js?v=28';
-import { initPanels, render as renderPanels, selectSat, setSpan, getSelectedSat, markAt } from './panels.js?v=28';
-import { setStepSec, getStepSec, loadCategory, getValue } from './loader.js?v=28';
+import { getState, patch } from './store.js?v=29';
+import { initPanels, render as renderPanels, selectSat, setSpan, getSelectedSat, markAt } from './panels.js?v=29';
+import { setStepSec, getStepSec, loadCategory, getValue } from './loader.js?v=29';
 
 const displayCfg = await (await fetch('/sim/config/display.json')).json();
 

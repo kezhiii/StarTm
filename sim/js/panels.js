@@ -1,5 +1,5 @@
-import { loadCategory, getValue, getStepSec, lastSecond } from './loader.js?v=28';
-import { createChart } from './chart.js?v=28';
+import { loadCategory, getValue, getStepSec, lastSecond } from './loader.js?v=29';
+import { createChart } from './chart.js?v=29';
 
 const $ = (id) => document.getElementById(id);
 const SERIES_COLORS = ['#7fe3d6', '#6fa8dc', '#9db2c6'];
@@ -114,12 +114,21 @@ function shadowBadge(epoch) {
     if (st.kind !== 'num') return `<span class="tag na"><i></i>光照 ${st.text}</span>`;
     const ratio = read('sun_eclipse', 'sun_ratio', selectedSat, epoch, 1);
     const sep = read('sun_eclipse', 'sun_sep_deg', selectedSat, epoch, 1);
+    const mg = read('sun_eclipse', 'umbra_margin_km', selectedSat, epoch, 1);
     const i = Math.round(st.raw);
     const cls = i === 0 ? 'ok' : i === 1 ? 'warn' : 'bad';
     const pct = ratio.kind === 'num' ? Math.round(ratio.n * 100) + '%' : '—';
-    const tip = `日面可见比例 ${pct}，日下点角距 ${sep.kind === 'num' ? sep.n.toFixed(2) + '°' : '—'}`
-        + '（按卫星看日面与地面的圆盘遮挡判定）';
-    return `<span class="tag ${cls}" title="${tip}"><i></i>光照 ${SHADOW_STATE[i] || st.text} · 日面 ${pct}</span>`;
+    const sepTxt = sep.kind === 'num' ? sep.n.toFixed(2) + '°' : '—';
+    // 本影裕度 = 卫星到日地连线的垂距 − 地球半径。画面里卫星落到夜半球不等于进了地影：
+    // 600 km 轨道的垂距最小也有 6826 km，比地球半径 6378 km 大，侧向绕得过本体。
+    const margin = mg.kind === 'num'
+        ? (mg.n >= 0 ? `距本影 ${Math.round(mg.n)} km` : `入本影 ${Math.round(-mg.n)} km`)
+        : '';
+    const tip = `日面可见比例 ${pct}，日下点角距 ${sepTxt}，本影裕度`
+        + `${mg.kind === 'num' ? ' ' + (mg.n >= 0 ? '+' : '') + Math.round(mg.n) + ' km' : ' —'}`
+        + '（卫星到日地连线的垂距减地球半径，>0 即在本影之外；画面上的夜半球不代表被遮挡）'
+        + '——按卫星看日面与地面的圆盘遮挡判定';
+    return `<span class="tag ${cls}" title="${tip}"><i></i>光照 ${SHADOW_STATE[i] || st.text} · 日面 ${pct}${margin ? ' · ' + margin : ''}</span>`;
 }
 
 function renderBadges(epoch) {

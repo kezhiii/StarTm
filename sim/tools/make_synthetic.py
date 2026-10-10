@@ -265,12 +265,15 @@ def shadow(r, sun):
     part = (~total) & (psi < ae + asun)
     vis = np.clip(1.0 - area / (np.pi * asun ** 2), 0.0, 1.0)
     sep = np.degrees(np.arccos(np.clip(np.sum(r * sun, axis=0) / (rm * np.linalg.norm(sun, axis=0)), -1, 1)))
-    return np.where(total, 2, np.where(part, 1, 0)), np.where(total, 0.0, vis), sep
+    margin = rm * np.sin(psi) - RE_KM      # 到日地连线的垂距减地球半径：>0 即在本影之外
+    return np.where(total, 2, np.where(part, 1, 0)), np.where(total, 0.0, vis), sep, margin
 
 
 sh = {k: shadow(sat_r[k], sun_u * sun_d) for k in (1, 2, 3)}
 cens = shadow(rc, sun_u * sun_d)
 ecl_flag = sh[1][0] // 2
+print("   地影裕度最小 %+.1f km（第 %d s），最大 %+.1f km"
+      % (sh[1][3].min(), int(grid[sh[1][3].argmin()]), sh[1][3].max()))
 print("   逐星地影：本影 %d s、半影 %d s、日面可见比例最小 %.4f；参考中心日下点角距最小 %.3f°"
       "（报告：本影 0、半影 0、β=90°-该角距 78.259~78.639）"
       % (int((sh[1][0] == 2).sum()), int((sh[1][0] == 1).sum()), sh[1][1].min(), cens[2].min()))
@@ -416,10 +419,10 @@ for k in (1, 2, 3):
     s_parts.append(pd.DataFrame({"sat_id": k, "rel_s": grid.astype(np.int64), "utcg": tstr,
         "sun_j2000_x": sun_u[0], "sun_j2000_y": sun_u[1], "sun_j2000_z": sun_u[2],
         "incidence_deg": inc[k], "eclipse": sh[k][0] // 2, "sun_ratio": sh[k][1],
-        "shadow_state": sh[k][0], "sun_sep_deg": sh[k][2]}))
+        "shadow_state": sh[k][0], "sun_sep_deg": sh[k][2], "umbra_margin_km": sh[k][3]}))
 write("sun_eclipse.csv", pd.concat(s_parts),
-      ["-", "s", "UTC", "J2000", "J2000", "J2000", "本体+Z_B", "0/1", "0~1", "0日照/1半影/2本影", "地心夹日角"],
-      ["-", "s", "-", "-", "-", "-", "deg", "-", "-", "-", "deg"])
+      ["-", "s", "UTC", "J2000", "J2000", "J2000", "本体+Z_B", "0/1", "0~1", "0日照/1半影/2本影", "地心夹日角", "垂直日地连线"],
+      ["-", "s", "-", "-", "-", "-", "deg", "-", "-", "-", "deg", "km"])
 
 g_parts = []
 for k in (1, 2, 3):
