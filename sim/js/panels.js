@@ -1,5 +1,5 @@
-import { loadCategory, getValue, getStepSec, lastSecond } from './loader.js?v=27';
-import { createChart } from './chart.js?v=27';
+import { loadCategory, getValue, getStepSec, lastSecond } from './loader.js?v=28';
+import { createChart } from './chart.js?v=28';
 
 const $ = (id) => document.getElementById(id);
 const SERIES_COLORS = ['#7fe3d6', '#6fa8dc', '#9db2c6'];
