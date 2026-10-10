@@ -31,6 +31,11 @@ export function updateThirdPersonDecor(sceneObjects, camera) {
     if (term && sun) {
         term.quaternion.setFromUnitVectors(Z_AXIS, sun.position.clone().normalize());
     }
+    // 影柱局部 −Y 指向背光侧：+Y 对齐 −日方向
+    const umbra = sceneObjects.umbraOutline;
+    if (umbra && sun) {
+        umbra.quaternion.setFromUnitVectors(Y_AXIS, sun.position.clone().normalize().negate());
+    }
     (sceneObjects.orbitRings || []).forEach((ring, k) => {
         ring.material.color.setHex(k === idx ? 0x7fe3d6 : 0x4488ff);
         ring.material.opacity = idx == null || k === idx ? 0.75 : 0.4;
@@ -51,8 +56,9 @@ function currentGmst(appState) {
 /**
  * 创建轨道环
  */
-const RING_STEPS = 360;
+const RING_STEPS = 360;   // 轨迹线的顶点数
 const Z_AXIS = new THREE.Vector3(0, 0, 1);
+const Y_AXIS = new THREE.Vector3(0, 1, 0);
 
 /** 把根数写进轨道环顶点（原地改，避免每步重建几何） */
 function fillOrbitRing(attr, a, e, i, OMG, omg) {
@@ -74,19 +80,44 @@ function fillOrbitRing(attr, a, e, i, OMG, omg) {
 }
 
 /**
- * 用当前历元的瞬时根数刷新轨道环。
- * 环是密切轨道（该时刻的两条二体解），根数漂移（J2 的升交点与近地点进动）会带着它一起动。
+ * 轨迹线改用数据里的真实位置画出：以当前步为中心取一整圈的历元，逐点写进线几何。
+ *
+ * 不用密切椭圆代替：J2 摄动下真实轨迹不是闭合椭圆（升交点每天进动约 1°），
+ * 用当前根数画的椭圆虽然每步都在重算，但对近圆轨道几乎看不出变化，容易被当成
+ * "轨道没更新"。直接连数据点既跟着走带移动，也是交付数据本身。
  */
-export function updateOrbitRingsFromData(sceneObjects, sats) {
-    const rings = sceneObjects.orbitRings;
-    if (!rings || !rings.length || !sats) return;
-    for (let i = 0; i < Math.min(rings.length, sats.length); i++) {
-        // 既收 CSV 帧对象，也收插值用的 14 列数组
-        const raw = sats[i];
-        const sat = Array.isArray(raw) ? { a: raw[2], e: raw[3], i: raw[4], OMG: raw[5], omg: raw[6] } : raw;
-        fillOrbitRing(rings[i].geometry.attributes.position, sat.a, sat.e,
-            sat.i * DEG, sat.OMG * DEG, sat.omg * DEG);
-        rings[i].geometry.computeBoundingSphere();
+const MU = 398600.4418;   // km^3/s^2
+
+/** 帧间隔（s），从首末历元的时间戳反推：数据集换 60 s/1 s 都不用改这里 */
+function frameStepSec(frames) {
+    const toSec = (ts) => {
+        const d = parseTimestamp(ts);
+        return Date.UTC(d.year, d.month - 1, d.day, d.hour, d.minute, d.second) / 1000;
+    };
+    const n = frames.length;
+    if (n < 2) return 1;
+    const dt = (toSec(frames[n - 1].timestamp) - toSec(frames[0].timestamp)) / (n - 1);
+    return Number.isFinite(dt) && dt > 0 ? dt : 1;
+}
+
+export function updateTrajectoryLines(sceneObjects, frames, idx) {
+    const lines = sceneObjects.orbitRings;
+    if (!lines || !lines.length || !frames || !frames.length) return;
+    const stepSec = frameStepSec(frames);
+    const a0 = frames[Math.min(idx, frames.length - 1)].sats[0].a;         // km
+    const period = 2 * Math.PI * Math.sqrt(a0 * a0 * a0 / MU);             // s
+    const span = Math.round(period / stepSec / 2);                         // 半个轨道周期的帧数
+    const stride = Math.max(1, Math.round(span / (RING_STEPS / 2)));
+    for (let i = 0; i < lines.length; i++) {
+        const attr = lines[i].geometry.attributes.position;
+        for (let k = 0; k <= RING_STEPS; k++) {
+            const fi = Math.max(0, Math.min(frames.length - 1, idx + (k - RING_STEPS / 2) * stride));
+            const sat = frames[fi] && frames[fi].sats && frames[fi].sats[i];
+            if (!sat) continue;
+            attr.setXYZ(k, sat.X * SAT_SCALE, sat.Z * SAT_SCALE, -sat.Y * SAT_SCALE);
+        }
+        attr.needsUpdate = true;
+        lines[i].geometry.computeBoundingSphere();
     }
 }
 
@@ -112,6 +143,33 @@ export function buildTerminator() {
         new THREE.LineBasicMaterial({ color: 0xffd9a0, transparent: true, opacity: 0.9 }));
     line.renderOrder = 2;
     return line;
+}
+
+/**
+ * 本影示意：沿日地连线背日方向画出的影柱轮廓，半径取地球半径（把太阳当点源时的本影）。
+ * 画它是因为「卫星在夜半球上方」和「卫星进了地影」在画面上看着一样：600 km 轨道
+ * 到日地连线的垂距始终大于地球半径，轮廓能把这层区别直接显示出来。
+ * 前端开口那一圈正好落在晨昏线上，不重复画；只画远端封口与四条母线。
+ */
+const UMBRA_LEN = RE_3D * 1.8;
+export function buildUmbraOutline() {
+    const grp = new THREE.Group();
+    const mat = new THREE.LineBasicMaterial({ color: 0x7f8ea3, transparent: true, opacity: 0.42 });
+    const rim = [];
+    for (let k = 0; k <= 128; k++) {
+        const th = k / 128 * Math.PI * 2;
+        rim.push(new THREE.Vector3(Math.cos(th) * RE_3D, -UMBRA_LEN, Math.sin(th) * RE_3D));
+    }
+    grp.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(rim), mat));
+    const gen = [];
+    for (let j = 0; j < 4; j++) {
+        const th = j * Math.PI / 2;
+        const x = Math.cos(th) * RE_3D, z = Math.sin(th) * RE_3D;
+        gen.push(new THREE.Vector3(x, 0, z), new THREE.Vector3(x, -UMBRA_LEN, z));
+    }
+    grp.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(gen), mat));
+    grp.renderOrder = 1;
+    return grp;
 }
 
 /**
@@ -165,6 +223,8 @@ export function initThirdPersonScene(scene, controls, appState) {
     scene.add(sceneObjects.selectionRing);
     sceneObjects.terminator = buildTerminator();
     scene.add(sceneObjects.terminator);
+    sceneObjects.umbraOutline = buildUmbraOutline();
+    scene.add(sceneObjects.umbraOutline);
 
     // 卫星网格：CSV/外部驱动按数据里的星数建，WS 模式按后端星座数
     const csvSats = (appState.currentMode === 'csv' && csv.satelliteData.length)

@@ -2,10 +2,10 @@
 import * as THREE from 'three';
 import { parseTimestamp, dateToJD, formatTimestamp, calcGMST } from '../modules/math-utils.js';
 import { placeGroundStationMarker } from '../modules/earth-rotation.js';
-import { THIRD_PERSON_CAMERA_POS } from '../modules/config.js';
+import { THIRD_PERSON_CAMERA_POS, RE_3D } from '../modules/config.js';
 import { interpolateSatellites, updateSatellitesThirdPersonInterp, updateSatellitesFirstPersonInterp, updateSatellitesCenterPersonInterp } from '../modules/interpolation.js';
 import { sendWsCommand as sendWsCmd, updateWsStatus as updateWsSts } from '../core/ws-utils.js';
-import { updateSatellitesThirdPersonWs, updateThirdPersonDecor, updateOrbitRingsFromData } from '../modules/views/third-person.js';
+import { updateSatellitesThirdPersonWs, updateThirdPersonDecor, updateTrajectoryLines } from '../modules/views/third-person.js';
 import { updateSatellitesFirstPersonWs } from '../modules/views/first-person.js';
 import { updateSatellitesCenterPersonWs } from '../modules/views/center-person.js';
 
@@ -94,8 +94,7 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
     function applyDrive() {
         applyAttitude();
         if (appState.currentView === 'third') {
-            const group = appState.csv.satelliteData[csvState.currentTimeIdx];
-            updateOrbitRingsFromData(appState.sceneObjects, group && group.sats);
+            updateTrajectoryLines(appState.sceneObjects, appState.csv.satelliteData, csvState.currentTimeIdx);
             updateThirdPersonDecor(appState.sceneObjects, camera);
         }
         chaseThirdPerson();
@@ -260,7 +259,7 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
             const currentView = appState.currentView;
             if (currentView === 'third') {
                 updateSatellitesThirdPersonInterp(interpData, appState.sceneObjects, appState.interaction, appState);
-                updateOrbitRingsFromData(appState.sceneObjects, interpData);   // 轨道环跟当前历元的密切根数走
+                updateTrajectoryLines(appState.sceneObjects, data, csvState.currentTimeIdx);   // 轨迹线用数据里的真实位置
                 if (csvState.externalMode) applyDrive();
             } else if (currentView === 'first') {
                 updateSatellitesFirstPersonInterp(interpData, appState);
@@ -1180,15 +1179,42 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
                 satCount: (appState.config || {}).satCount,
                 selectedSatIdx: (appState.sceneObjects || {}).selectedSatIdx,
                 cam: camera ? camera.position.toArray().map(v => +v.toFixed(1)) : null,
-                rings: (appState.sceneObjects.orbitRings || []).map(r => ({
-                    v0: Array.from(r.geometry.attributes.position.array.slice(0, 3)).map(v => +v.toFixed(2)),
-                    col: r.material.color.getHexString(),
-                })),
+                rings: (appState.sceneObjects.orbitRings || []).map((r, k) => {
+                    const attr = r.geometry.attributes.position;
+                    const mid = new THREE.Vector3().fromBufferAttribute(attr, Math.floor(attr.count / 2));
+                    const m = (appState.sceneObjects.satelliteMeshes3D || [])[k];
+                    return {
+                        v0: Array.from(attr.array.slice(0, 3)).map(v => +v.toFixed(2)),
+                        col: r.material.color.getHexString(),
+                        // mid 应落在本星当前位置上：轨迹线直接连数据点，中心顶点取的就是当前历元；
+                        // 若画的是根数椭圆，中心顶点是真近点角 180°，gap 会是轨道量级而不是 ~0。
+                        mid: r3(mid.toArray()),
+                        gap: m ? +mid.distanceTo(m.position).toFixed(3) : null,
+                    };
+                }),
                 term: (() => {
                     const t = appState.sceneObjects.terminator;
                     if (!t) return null;
                     const n = new THREE.Vector3(0, 0, 1).applyQuaternion(t.quaternion);
                     return n.toArray().map(v => +v.toFixed(3));
+                })(),
+                // 用画面几何反算本影裕度：与数据里的 umbra_margin_km 应当对得上，
+                // 对得上说明「画出来的影柱」和「星历算出来的遮挡」是同一件事。
+                umbra: (() => {
+                    const u = appState.sceneObjects.umbraOutline;
+                    const m = (appState.sceneObjects.satelliteMeshes3D || [])[0];
+                    if (!u || !sun || !m) return null;
+                    const km = 6378.137 / RE_3D;          // 1 场景单位 = 多少 km
+                    const s = sun.position.clone().normalize();
+                    const p = m.position.clone();
+                    const along = p.dot(s);
+                    const perp = Math.sqrt(Math.max(0, p.lengthSq() - along * along));
+                    return {
+                        axis: new THREE.Vector3(0, 1, 0).applyQuaternion(u.quaternion).toArray().map(v => +v.toFixed(3)),
+                        alongKm: +(along * km).toFixed(1),
+                        perpKm: +(perp * km).toFixed(1),
+                        edgeKm: +((perp - RE_3D) * km).toFixed(1),
+                    };
                 })(),
                 lights: appState.lightManager
                     ? [...appState.lightManager.getAllStates().entries()].filter(([, s]) => s.isOn).map(([i]) => i)
