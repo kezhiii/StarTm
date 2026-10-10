@@ -48,7 +48,7 @@ units:
   deg_to_rad: 0.017453292519943295  # π/180
 
 csv:
-  default_path: "../sim-data/preview/orbit_14col_60s.csv"
+  default_path: "../sim-data/projection/orbit_14col.csv"
   compress: true
 
 logging:
