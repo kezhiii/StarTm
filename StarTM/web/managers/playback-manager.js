@@ -5,7 +5,7 @@ import { placeGroundStationMarker } from '../modules/earth-rotation.js';
 import { THIRD_PERSON_CAMERA_POS } from '../modules/config.js';
 import { interpolateSatellites, updateSatellitesThirdPersonInterp, updateSatellitesFirstPersonInterp, updateSatellitesCenterPersonInterp } from '../modules/interpolation.js';
 import { sendWsCommand as sendWsCmd, updateWsStatus as updateWsSts } from '../core/ws-utils.js';
-import { updateSatellitesThirdPersonWs, updateThirdPersonDecor } from '../modules/views/third-person.js';
+import { updateSatellitesThirdPersonWs, updateThirdPersonDecor, updateOrbitRingsFromData } from '../modules/views/third-person.js';
 import { updateSatellitesFirstPersonWs } from '../modules/views/first-person.js';
 import { updateSatellitesCenterPersonWs } from '../modules/views/center-person.js';
 
@@ -93,7 +93,11 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
     /** 每帧的驱动动作：姿态、屏幕缩放与选中框。重建或换视角后也要立刻补一次，否则新网格保持 identity 姿态 */
     function applyDrive() {
         applyAttitude();
-        if (appState.currentView === 'third') updateThirdPersonDecor(appState.sceneObjects, camera);
+        if (appState.currentView === 'third') {
+            const group = appState.csv.satelliteData[csvState.currentTimeIdx];
+            updateOrbitRingsFromData(appState.sceneObjects, group && group.sats);
+            updateThirdPersonDecor(appState.sceneObjects, camera);
+        }
         chaseThirdPerson();
     }
 
@@ -256,6 +260,7 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
             const currentView = appState.currentView;
             if (currentView === 'third') {
                 updateSatellitesThirdPersonInterp(interpData, appState.sceneObjects, appState.interaction, appState);
+                updateOrbitRingsFromData(appState.sceneObjects, interpData);   // 轨道环跟当前历元的密切根数走
                 if (csvState.externalMode) applyDrive();
             } else if (currentView === 'first') {
                 updateSatellitesFirstPersonInterp(interpData, appState);
@@ -1175,6 +1180,16 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
                 satCount: (appState.config || {}).satCount,
                 selectedSatIdx: (appState.sceneObjects || {}).selectedSatIdx,
                 cam: camera ? camera.position.toArray().map(v => +v.toFixed(1)) : null,
+                rings: (appState.sceneObjects.orbitRings || []).map(r => ({
+                    v0: Array.from(r.geometry.attributes.position.array.slice(0, 3)).map(v => +v.toFixed(2)),
+                    col: r.material.color.getHexString(),
+                })),
+                term: (() => {
+                    const t = appState.sceneObjects.terminator;
+                    if (!t) return null;
+                    const n = new THREE.Vector3(0, 0, 1).applyQuaternion(t.quaternion);
+                    return n.toArray().map(v => +v.toFixed(3));
+                })(),
                 lights: appState.lightManager
                     ? [...appState.lightManager.getAllStates().entries()].filter(([, s]) => s.isOn).map(([i]) => i)
                     : null,
@@ -1204,6 +1219,7 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
             if (timeSlider) timeSlider.value = i;
             const bar = document.getElementById('time-bar');
             if (bar) bar.style.width = (times.length > 1 ? (i / (times.length - 1)) * 100 : 0) + '%';
+            applyDrive();   // 定位后立刻同步姿态/轨道环/晨昏线，不依赖 rAF 是否还在跑
             return true;
         },
         setRate(mult) {

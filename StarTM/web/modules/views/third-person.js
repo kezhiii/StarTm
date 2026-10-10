@@ -25,6 +25,16 @@ export function updateThirdPersonDecor(sceneObjects, camera) {
     applyScreenScale(meshes, cam);
     const idx = sceneObjects.selectedSatIdx;
     placeSelectionRing(sceneObjects.selectionRing, idx == null ? null : meshes[idx], cam);
+
+    const term = sceneObjects.terminator;
+    const sun = meshes[0].parent && meshes[0].parent.userData.sunLight;
+    if (term && sun) {
+        term.quaternion.setFromUnitVectors(Z_AXIS, sun.position.clone().normalize());
+    }
+    (sceneObjects.orbitRings || []).forEach((ring, k) => {
+        ring.material.color.setHex(k === idx ? 0x7fe3d6 : 0x4488ff);
+        ring.material.opacity = idx == null || k === idx ? 0.75 : 0.4;
+    });
 }
 
 /**
@@ -41,12 +51,15 @@ function currentGmst(appState) {
 /**
  * 创建轨道环
  */
-export function createOrbitRing(a, e, i, OMG, omg) {
-    const points = [];
+const RING_STEPS = 360;
+const Z_AXIS = new THREE.Vector3(0, 0, 1);
+
+/** 把根数写进轨道环顶点（原地改，避免每步重建几何） */
+function fillOrbitRing(attr, a, e, i, OMG, omg) {
     const cosO = Math.cos(OMG), sinO = Math.sin(OMG);
     const cosI = Math.cos(i), sinI = Math.sin(i);
     const cosW = Math.cos(omg), sinW = Math.sin(omg);
-    for (let f = 0; f <= 360; f++) {
+    for (let f = 0; f <= RING_STEPS; f++) {
         const fRad = f * DEG;
         const p = a * (1 - e * e);
         const r = p / (1 + e * Math.cos(fRad));
@@ -55,9 +68,50 @@ export function createOrbitRing(a, e, i, OMG, omg) {
         const x = (cosO * cosW - sinO * sinW * cosI) * x_orb + (-cosO * sinW - sinO * cosW * cosI) * y_orb;
         const y = (sinO * cosW + cosO * sinW * cosI) * x_orb + (-sinO * sinW + cosO * cosW * cosI) * y_orb;
         const z = (sinW * sinI) * x_orb + (cosW * sinI) * y_orb;
-        points.push(new THREE.Vector3(x * SAT_SCALE, z * SAT_SCALE, -y * SAT_SCALE));
+        attr.setXYZ(f, x * SAT_SCALE, z * SAT_SCALE, -y * SAT_SCALE);
     }
-    return new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), ORBIT_RING_MAT);
+    attr.needsUpdate = true;
+}
+
+/**
+ * 用当前历元的瞬时根数刷新轨道环。
+ * 环是密切轨道（该时刻的两条二体解），根数漂移（J2 的升交点与近地点进动）会带着它一起动。
+ */
+export function updateOrbitRingsFromData(sceneObjects, sats) {
+    const rings = sceneObjects.orbitRings;
+    if (!rings || !rings.length || !sats) return;
+    for (let i = 0; i < Math.min(rings.length, sats.length); i++) {
+        // 既收 CSV 帧对象，也收插值用的 14 列数组
+        const raw = sats[i];
+        const sat = Array.isArray(raw) ? { a: raw[2], e: raw[3], i: raw[4], OMG: raw[5], omg: raw[6] } : raw;
+        fillOrbitRing(rings[i].geometry.attributes.position, sat.a, sat.e,
+            sat.i * DEG, sat.OMG * DEG, sat.omg * DEG);
+        rings[i].geometry.computeBoundingSphere();
+    }
+}
+
+export function createOrbitRing(a, e, i, OMG, omg) {
+    const points = [];
+    const cosO = Math.cos(OMG), sinO = Math.sin(OMG);
+    const cosI = Math.cos(i), sinI = Math.sin(i);
+    const cosW = Math.cos(omg), sinW = Math.sin(omg);
+    fillOrbitRing({ setXYZ: (idx, x, y, z) => points.push(new THREE.Vector3(x, y, z)) }, a, e, i, OMG, omg);
+    const geo = new THREE.BufferGeometry().setFromPoints(points);
+    const line = new THREE.Line(geo, ORBIT_RING_MAT.clone());   // 各自一份材质，选中星要单独着色
+    return line;
+}
+
+/** 晨昏线：法线沿太阳方向的圆，半径略高于地表，由太阳星历方向摆放 */
+export function buildTerminator() {
+    const pts = [];
+    for (let k = 0; k <= 256; k++) {
+        const th = k / 256 * Math.PI * 2;
+        pts.push(new THREE.Vector3(Math.cos(th) * RE_3D * 1.004, Math.sin(th) * RE_3D * 1.004, 0));
+    }
+    const line = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(pts),
+        new THREE.LineBasicMaterial({ color: 0xffd9a0, transparent: true, opacity: 0.9 }));
+    line.renderOrder = 2;
+    return line;
 }
 
 /**
@@ -109,6 +163,8 @@ export function initThirdPersonScene(scene, controls, appState) {
     thirdCam = appState.camera;
     sceneObjects.selectionRing = buildSelectionRing();
     scene.add(sceneObjects.selectionRing);
+    sceneObjects.terminator = buildTerminator();
+    scene.add(sceneObjects.terminator);
 
     // 卫星网格：CSV/外部驱动按数据里的星数建，WS 模式按后端星座数
     const csvSats = (appState.currentMode === 'csv' && csv.satelliteData.length)
