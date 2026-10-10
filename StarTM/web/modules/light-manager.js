@@ -34,7 +34,7 @@ export function createLightManager(getSceneObjectsFn) {
          */
         init(satCount) {
             for (let i = 0; i < satCount; i++) {
-                lightStates.set(i, { isOn: false });
+                lightStates.set(i, { isOn: false, shade: 1 });
             }
         },
 
@@ -49,8 +49,21 @@ export function createLightManager(getSceneObjectsFn) {
                 return;
             }
 
-            lightStates.set(satIdx, { isOn });
+            const st = lightStates.get(satIdx) || {};
+            st.isOn = isOn;
+            lightStates.set(satIdx, st);
             this._updateSatelliteLight(satIdx, isOn);
+        },
+
+        /**
+         * 受光比例 0~1：主界面按星历地影判定推入，压暗本体与太阳翼。
+         * 发光面是自行发光的显示载荷，不随地影变暗。
+         */
+        setShade(satIdx, shade) {
+            const st = lightStates.get(satIdx);
+            if (!st) return;
+            st.shade = Math.max(0, Math.min(1, Number(shade)));
+            this._updateSatelliteLight(satIdx, st.isOn);
         },
 
         /**
@@ -61,7 +74,7 @@ export function createLightManager(getSceneObjectsFn) {
             const state = lightStates.get(satIdx);
             if (state) {
                 const newState = !state.isOn;
-                lightStates.set(satIdx, { isOn: newState });
+                state.isOn = newState;
                 this._updateSatelliteLight(satIdx, newState);
                 return newState;
             }
@@ -160,6 +173,9 @@ export function createLightManager(getSceneObjectsFn) {
             }
 
             const isVisible = mesh.visible;
+            const shade = (lightStates.get(satIdx) || {}).shade;
+            const k = shade == null || !Number.isFinite(shade) ? 1 : shade;
+            for (const wing of mesh.userData.wings || []) wing.material.color.setHex(0x1a3a6b).multiplyScalar(k);
 
             if (isOn) {
                 // 点亮：对地发光面发暖光，本体按可见性着色
@@ -168,14 +184,14 @@ export function createLightManager(getSceneObjectsFn) {
                 }
                 body.material.emissive.setHex(LIGHT_CONFIG.emissiveColor);
                 body.material.emissiveIntensity = LIGHT_CONFIG.emissiveIntensity;
-                body.material.color.setHex(isVisible ? LIGHT_CONFIG.onColor.visible : LIGHT_CONFIG.onColor.hidden);
+                body.material.color.setHex(isVisible ? LIGHT_CONFIG.onColor.visible : LIGHT_CONFIG.onColor.hidden).multiplyScalar(k);
             } else {
                 if (face) {
                     face.material.color.setHex(0x2a2a35);
                 }
                 body.material.emissive.setHex(0x000000);
                 body.material.emissiveIntensity = 0;
-                body.material.color.setHex(isVisible ? LIGHT_CONFIG.offColor.visible : LIGHT_CONFIG.offColor.hidden);
+                body.material.color.setHex(isVisible ? LIGHT_CONFIG.offColor.visible : LIGHT_CONFIG.offColor.hidden).multiplyScalar(k);
             }
         },
 

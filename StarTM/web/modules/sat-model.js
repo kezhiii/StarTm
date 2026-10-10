@@ -19,6 +19,7 @@ export function buildSatelliteMesh(bodyMaterial) {
     const wingBottom = new THREE.Mesh(wingGeo, wingMat);
     wingBottom.position.y = -1.12;
     group.add(wingBottom);
+    group.userData.wings = [wingTop, wingBottom];
 
     const faceMat = new THREE.MeshBasicMaterial({ color: 0xffe08a, side: THREE.DoubleSide });
     const face = new THREE.Mesh(new THREE.PlaneGeometry(0.88, 0.72), faceMat);

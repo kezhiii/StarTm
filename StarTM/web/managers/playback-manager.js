@@ -1137,9 +1137,25 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
             }
         },
         onPick: null,
-        setLight(satIdx, on) {
+        setLight(satIdx, on, shade) {
             if (!appState.lightManager) return false;
             appState.lightManager.setLight(satIdx, !!on);
+            if (shade != null && appState.lightManager.setShade) appState.lightManager.setShade(satIdx, shade);
+            return true;
+        },
+        /** 把相机挪到「站址与日下点之间」，让晨昏线落在可见圆盘上：
+         *  否则默认机位可能整面都是夜半球，卫星看着像被地球挡住。 */
+        frameDaylight() {
+            const gs = appState.sceneObjects.groundStationMarker3D;
+            const light = scene && scene.userData.sunLight;
+            if (!gs || !light || !controls) return false;
+            const dir = gs.position.clone().normalize()
+                .add(light.position.clone().normalize().multiplyScalar(0.6));
+            dir.y = Math.max(dir.y, 0.25);
+            dir.normalize().multiplyScalar(THIRD_PERSON_CAMERA_POS.length());
+            camera.position.copy(dir);
+            controls.target.set(0, 0, 0);
+            controls.update();
             return true;
         },
         __probe: () => {
@@ -1163,7 +1179,9 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
                     ? [...appState.lightManager.getAllStates().entries()].filter(([, s]) => s.isOn).map(([i]) => i)
                     : null,
                 meshes: (meshes || []).map(m => ({ satIdx: m.userData.satIdx, vis: m.visible, scale: m.scale.x,
-                    q: m.quaternion.toArray().map(v => +v.toFixed(3)), p: r3(m.position.toArray()) })),
+                    q: m.quaternion.toArray().map(v => +v.toFixed(3)), p: r3(m.position.toArray()),
+                    c: m.userData.body ? m.userData.body.material.color.getHexString() : null,
+                    wing: m.userData.wings ? m.userData.wings[0].material.color.getHexString() : null })),
             };
         },
         setStep(i) {
