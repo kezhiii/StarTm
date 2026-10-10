@@ -27,7 +27,7 @@ let selectedSat = 1;
 let charts = {};
 let spanSec = 0;
 let marks = [];            // 时间标尺上的可解释标记：{from,to,tip}
-let t0ms = 0;              // 数据起点（UTC 毫秒），事件表只有绝对时刻
+let t0ms = 0;              // 数据起点（UTC 毫秒），事件表只有绝对时刻，由桥的首帧时间戳给出
 let hooks = {};
 
 const key = (file, field) => `${file}.${field}`;
@@ -205,9 +205,10 @@ function seriesFor(spec, epLo, epHi) {
     const e = entries[spec.file];
     if (!e) return [];
     const stepSec = getStepSec();
+    const stride = Math.max(1, Math.ceil((epHi - epLo) / 600));   // 1 秒数据抽到 ≤600 点，画得快也不糊
     return spec.series.map((s, i) => {
         const data = [];
-        for (let ep = epLo; ep <= epHi; ep++) {
+        for (let ep = epLo; ep <= epHi; ep += stride) {
             const v = read(spec.file, s.field, selectedSat, ep, spec.scale);
             if (v.kind === 'num') data.push({ x: ep * stepSec, y: v.n });
         }
@@ -217,7 +218,8 @@ function seriesFor(spec, epLo, epHi) {
 
 function renderCharts(simSeconds) {
     const stepSec = getStepSec();
-    const epHi = Math.min((entries[Object.keys(entries)[0]]?.nEpoch || 1) - 1, Math.floor((simSeconds + 600) / stepSec));
+    const nEpoch = Math.max(...Object.values(entries).map(e => e.nEpoch || 1));
+    const epHi = Math.min(nEpoch - 1, Math.floor((simSeconds + 600) / stepSec));
     const epLo = Math.max(0, Math.floor((simSeconds - 3600) / stepSec));
     for (const { spec, chart, host } of Object.values(charts)) {
         const d = cfg.display;
@@ -377,7 +379,7 @@ export async function initPanels(displayJson, h) {
             if (Number.isFinite(v)) nominal[`${spec.file}.${s.field}`] = v * (spec.scale || 1);
         }
     }
-    t0ms = Date.parse((entries.time_ident?.rows[0]?.utcg || '').replace(' ', 'T') + 'Z') || 0;
+    t0ms = hooks.t0ms ? hooks.t0ms() : 0;
     buildTargets();
     buildCharts();
     if (missing.size) hooks.onMissing([...missing]);

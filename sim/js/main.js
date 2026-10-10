@@ -194,6 +194,7 @@ $('btnAttach').onclick = async () => {
                 $('alarmTag').className = 'tag ' + (n ? 'bad' : 'ok');
             },
             onMissing: files => setData(`数据缺 ${files.join('、')}`, 'warn'),
+            t0ms: () => { const t = bridge && bridge.getTimestamp(0); return t ? Date.parse(t.replace(/^(\d{4})(\d\d)(\d\d)(\d\d)(\d\d)(\d\d)/, '$1-$2-$3T$4:$5:$6Z')) : 0; },
         });
         setSpan(s.totalSteps * s.stepIntervalSec);
     } catch (e) {
