@@ -16,6 +16,29 @@ from ..services.propagation_service import PropagationService
 from ..core.frame_data import FrameData
 
 
+# 这些字样出现即说明这条 WebSocket 已经不可用
+_DEAD_HINTS = ("not connected", "accept", "closed", "disconnect", "broken pipe",
+               "connectionabort", "cannot call", "starved")
+
+
+def socket_dead(exc: BaseException) -> bool:
+    """异常是否意味着这条 WebSocket 已经废了。
+
+    断开后再收发，Starlette 抛的是
+    RuntimeError('WebSocket is not connected. Need to call "accept" first.')，
+    字样里既没有 closed 也没有 disconnect。旧代码只按字样认，认不出就打印并继续循环，
+    一个客户端断开能把磁盘刷满（实测单次事故 46 GB）。
+    """
+    try:
+        from starlette.websockets import WebSocketDisconnect
+        if isinstance(exc, WebSocketDisconnect):
+            return True
+    except Exception:      # starlette 不在（单测里可能）
+        pass
+    text = str(exc).lower()
+    return any(h in text for h in _DEAD_HINTS) or "ConnectionClosed" in type(exc).__name__
+
+
 @dataclass
 class SessionStats:
     """会话统计信息"""
@@ -96,6 +119,14 @@ class ClientSession:
                 
         self.service.stop()
         
+    def socket_connected(self) -> bool:
+        """直接问 Starlette 的连接状态，不靠异常字样猜"""
+        try:
+            from starlette.websockets import WebSocketState
+            return self.websocket.client_state == WebSocketState.CONNECTED
+        except Exception:
+            return True
+
     async def _push_loop(self) -> None:
         """独立推送循环"""
         try:
@@ -118,7 +149,8 @@ class ClientSession:
             # 关键修复：移除60秒超时检测，依赖WebSocket原生ping/pong机制
             # 前端后台10秒后自动发送pause，连接保持不断开
             
-            while self.is_active and self.service.state.value != "stopped":
+            unknown_errors = 0
+            while self.is_active and self.socket_connected() and self.service.state.value != "stopped":
                 try:
                     msg = await asyncio.wait_for(
                         self.websocket.receive_text(), 
@@ -126,19 +158,21 @@ class ClientSession:
                     )
                     self.stats.last_activity = time.time()
                     await self._handle_message(msg)
+                    unknown_errors = 0
                     
                 except asyncio.TimeoutError:
                     pass
                 except Exception as e:
-                    error_str = str(e)
-                    error_type = str(type(e).__name__)
-                    # WebSocket 已断开时的多种错误表现
-                    if ("ConnectionClosed" in error_type or
-                            "disconnect" in error_str.lower() or
-                            "closed" in error_str.lower()):
-                        print(f"[Client {self.client_id}] 连接已关闭")
+                    if socket_dead(e) or not self.socket_connected():
+                        print(f"[Client {self.client_id}] 连接已断开，退出推送循环: {e}")
                         break
-                    print(f"[Client {self.client_id}] 处理消息时出错: {e}")
+                    # 认不出的错误也绝不无限重试：首末各打一条，攒够次数就收摊
+                    unknown_errors += 1
+                    if unknown_errors <= 3:
+                        print(f"[Client {self.client_id}] 处理消息时出错: {type(e).__name__}: {e}")
+                    if unknown_errors >= 20:
+                        print(f"[Client {self.client_id}] 连续 {unknown_errors} 次未识别错误，退出推送循环")
+                        break
                     
         except asyncio.CancelledError:
             print(f"[Client {self.client_id}] 推送循环被取消")
