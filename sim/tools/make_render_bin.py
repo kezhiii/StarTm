@@ -37,7 +37,8 @@ SPEC = {
 
 def main():
     os.makedirs(OUT, exist_ok=True)
-    f32_parts, i16_parts, cols = [], [], []
+    parts, cols = [], []      # 与 cols 一一对应，顺序即写入顺序
+    blob32, blob16 = [], []
     n_epoch = None
     # 历元级文件要按星复制，先确定星号集合
     sats = sorted(pd.read_csv(os.path.join(SRC, "ground_obs.csv"), comment="#",
@@ -74,7 +75,7 @@ def main():
                 mat[sat_pos, ep_idx] = src
             else:
                 mat[:, :n] = np.tile(src, (len(sats), 1))[:, :n]
-            f32_parts.append(mat)
+            parts.append(mat)
             cols.append({"file": name, "field": field, "dtype": "f32", "perSat": spec["perSat"]})
         for field in spec.get("txt", []):
             codes, uniq = pd.factorize(df[field])
@@ -83,14 +84,14 @@ def main():
                 mat[sat_pos, ep_idx] = codes
             else:
                 mat[:, :n] = np.tile(codes, (len(sats), 1))[:, :n]
-            i16_parts.append(mat)
+            parts.append(mat)
             cols.append({"file": name, "field": field, "dtype": "i16", "perSat": spec["perSat"],
                          "codes": [("" if v is None or (isinstance(v, float) and np.isnan(v)) else str(v)) for v in uniq]})
 
-    # 排布局：所有列按 (星, 历元) 展平后拼接，offset 以元素个数计
+    # 排布局：按写入顺序给偏移，两种 dtype 各一条游标。
+    # 早先按 (f32 列表 + i16 列表) 与 cols 配对，遇到中间夹文本列的文件后偏移整体错位。
     off32 = off16 = 0
-    blob32, blob16 = [], []
-    for part, col in zip(f32_parts + i16_parts, cols):
+    for part, col in zip(parts, cols):
         flat = np.ascontiguousarray(part).reshape(-1)
         if col["dtype"] == "f32":
             col["offset"], col["count"], off32 = off32, flat.size, off32 + flat.size
@@ -99,8 +100,8 @@ def main():
             col["offset"], col["count"], off16 = off16, flat.size, off16 + flat.size
             blob16.append(flat)
 
-    data32 = np.concatenate([np.ascontiguousarray(x).reshape(-1) for x in blob32]) if blob32 else np.zeros(0, np.float32)
-    data16 = np.concatenate([np.ascontiguousarray(x).reshape(-1) for x in blob16]) if blob16 else np.zeros(0, np.int16)
+    data32 = np.concatenate(blob32) if blob32 else np.zeros(0, np.float32)
+    data16 = np.concatenate(blob16) if blob16 else np.zeros(0, np.int16)
     data32.tofile(os.path.join(OUT, "columns.f32"))
     data16.tofile(os.path.join(OUT, "codes.i16"))
 
