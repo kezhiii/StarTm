@@ -280,15 +280,17 @@
   </div>
   <div class="grp" id="grpView">
     <span class="gl">视角</span>
-    <div class="seg" id="viewSel" role="group" aria-label="三维视角模式">
+    <div class="gr" style="gap:7px">
+      <div class="seg" id="viewSel" role="group" aria-label="三维视角模式">
       <button data-view="third" class="on">全局轨道</button>
       <button data-view="follow">目标跟随</button>
       <button data-view="center">编队近景</button>
-    </div>
+      </div>
+      <button class="btn" id="btnDaylight" title="把相机挪到站址与日下点之间，使晨昏线落在可见圆盘上">昼侧视角</button>
   </div>
 </footer>
 
 <div id="tip"></div>
-<script type="module" src="./js/main.js?v=25"></script>
+<script type="module" src="./js/main.js?v=27"></script>
 </body>
 </html>

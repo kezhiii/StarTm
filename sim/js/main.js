@@ -1,6 +1,6 @@
-import { getState, patch } from './store.js';
-import { initPanels, render as renderPanels, selectSat, setSpan, getSelectedSat, markAt } from './panels.js';
-import { setStepSec, getStepSec, loadCategory, getValue } from './loader.js';
+import { getState, patch } from './store.js?v=27';
+import { initPanels, render as renderPanels, selectSat, setSpan, getSelectedSat, markAt } from './panels.js?v=27';
+import { setStepSec, getStepSec, loadCategory, getValue } from './loader.js?v=27';
 
 const displayCfg = await (await fetch('/sim/config/display.json')).json();
 
@@ -76,7 +76,9 @@ function pushSceneState(simSeconds) {
     if (dispEntry && bridge.setLight) {
         const ep = Math.min(e, dispEntry.nEpoch - 1);
         for (const sat of dispEntry.satIds) {
-            bridge.setLight(sat - 1, Number(getValue(dispEntry, ep, sat, 'actual_strobe')) === 1);
+            const on = Number(getValue(dispEntry, ep, sat, 'actual_strobe')) === 1;
+            const ratio = sunEntry ? Number(getValue(sunEntry, ep, sat, 'sun_ratio')) : 1;
+            bridge.setLight(sat - 1, on, Number.isFinite(ratio) ? ratio : 1);
         }
     }
 }
@@ -201,6 +203,7 @@ $('btnAttach').onclick = async () => {
         setRun('参数台初始化失败：' + e.message, 'bad');
     }
     showStep(0);
+    if (bridge.frameDaylight) bridge.frameDaylight();   // 机位挪到昼侧，避免整面都是夜半球
     $('btnAttach').textContent = '重新装载';
     setRun('已接入，待播放', 'ok');
     setData(`星历回放 ${s.totalSteps} 步 · ${s.stepIntervalSec} s`, 'ok');
@@ -249,6 +252,7 @@ $('stepSlider').addEventListener('mousemove', (e) => {
 });
 $('stepSlider').addEventListener('mouseleave', () => { $('tip').style.display = 'none'; });
 
+$('btnDaylight').onclick = () => { bridge && bridge.frameDaylight && bridge.frameDaylight(); };
 $('btnTogglePanels').onclick = () => {
     const tight = document.body.classList.toggle('tight');
     $('btnTogglePanels').textContent = tight ? '展开面板' : '收起面板';

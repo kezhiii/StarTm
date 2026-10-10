@@ -41,6 +41,7 @@ export function createChart(canvas, { fmtY = v => Math.round(v * 10) / 10, onPic
         if (box.x1 === box.x0) box.x1 = box.x0 + 1;
         if (y1 === y0) { y1 = y0 + 1; y0 -= 1; }
         const pad = (y1 - y0) * 0.12; y0 -= pad; y1 += pad;
+        box.y0 = y0; box.y1 = y1;
         box.L = 42; box.R = W - 8; box.T = 6; box.B = H - 16;
 
         // 允许带

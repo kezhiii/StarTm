@@ -1,5 +1,5 @@
-import { loadCategory, getValue, getStepSec, lastSecond } from './loader.js';
-import { createChart } from './chart.js';
+import { loadCategory, getValue, getStepSec, lastSecond } from './loader.js?v=27';
+import { createChart } from './chart.js?v=27';
 
 const $ = (id) => document.getElementById(id);
 const SERIES_COLORS = ['#7fe3d6', '#6fa8dc', '#9db2c6'];
@@ -106,8 +106,24 @@ function renderHero(epoch) {
     }).join('');
 }
 
+const SHADOW_STATE = ['日照', '半影', '本影'];
+
+// 光照状态取自星历算出的日/地圆盘遮挡判定，不靠画面黑不黑来猜
+function shadowBadge(epoch) {
+    const st = read('sun_eclipse', 'shadow_state', selectedSat, epoch, 1);
+    if (st.kind !== 'num') return `<span class="tag na"><i></i>光照 ${st.text}</span>`;
+    const ratio = read('sun_eclipse', 'sun_ratio', selectedSat, epoch, 1);
+    const sep = read('sun_eclipse', 'sun_sep_deg', selectedSat, epoch, 1);
+    const i = Math.round(st.raw);
+    const cls = i === 0 ? 'ok' : i === 1 ? 'warn' : 'bad';
+    const pct = ratio.kind === 'num' ? Math.round(ratio.n * 100) + '%' : '—';
+    const tip = `日面可见比例 ${pct}，日下点角距 ${sep.kind === 'num' ? sep.n.toFixed(2) + '°' : '—'}`
+        + '（按卫星看日面与地面的圆盘遮挡判定）';
+    return `<span class="tag ${cls}" title="${tip}"><i></i>光照 ${SHADOW_STATE[i] || st.text} · 日面 ${pct}</span>`;
+}
+
 function renderBadges(epoch) {
-    $('badges').innerHTML = BADGES.map(b => {
+    $('badges').innerHTML = shadowBadge(epoch) + BADGES.map(b => {
         const v = read(b.file, b.field, selectedSat, epoch, 1);
         if (b.bool && v.kind === 'num') {
             return `<span class="tag ${v.raw === 1 ? 'ok' : 'na'}"><i></i>${b.name} ${v.raw === 1 ? '是' : '否'}</span>`;
@@ -366,7 +382,7 @@ export async function initPanels(displayJson, h) {
     const files = new Set();
     cfg.groups.forEach(g => g.rows.forEach(r => files.add(r.file)));
     (displayJson.charts || []).forEach(c => files.add(c.file));
-    ['ground_obs', 'display', 'events', 'time_ident'].forEach(f => files.add(f));
+    ['ground_obs', 'display', 'events', 'time_ident', 'sun_eclipse'].forEach(f => files.add(f));
     for (const f of files) {
         try { entries[f] = await loadCategory(f); } catch (e) { missing.add(f); }
     }

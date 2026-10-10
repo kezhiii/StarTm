@@ -144,7 +144,8 @@ sun_g = get_sun(times).transform_to(GCRS(obstime=times))
 sun_u = np.stack([sun_g.cartesian.x.to(u.km).value,
                   sun_g.cartesian.y.to(u.km).value,
                   sun_g.cartesian.z.to(u.km).value])
-sun_u /= np.linalg.norm(sun_u, axis=0)
+sun_d = np.linalg.norm(sun_u, axis=0)          # 太阳地心距 km，算视半径要用
+sun_u = sun_u / sun_d
 sun_i = np.einsum("nij,jn->in", M_c2t, sun_u)
 
 F = 6.69437999014e-3
@@ -235,10 +236,44 @@ nom = inc[2][~mask & (grid < MAN_T0)]
 print(f"   名义入射角范围 {nom.min():.3f}° ~ {nom.max():.3f}°（理论 90°±(90°-β)）")
 assert 77.0 < nom.min() < 79.5 and 100.5 < nom.max() < 102.5
 
-anti = -np.sum(sun_u * rc, axis=0)
-perp = np.linalg.norm(rc - sun_u * np.sum(sun_u * rc, axis=0)[None, :], axis=0)
-ecl_flag = ((anti > 0) & (perp < 6378.137)).astype(int)
-print(f"   地影采样点 {int(ecl_flag.sum())}（复核晨昏轨道零地影）")
+RE_KM, RS_KM = 6378.137, 695700.0
+
+
+def shadow(r, sun):
+    """按卫星看地心、看太阳两个圆盘的遮挡判定光照状态：返回 (状态, 太阳可见比例, β 角 deg)。
+
+    状态 0 日照 / 1 半影 / 2 本影。用圆盘重叠面积而不是圆柱近似，半影里的可见比例才有意义；
+    视角都 <1°，把角距当平面圆半径的相对误差在 1e-5 量级。
+    """
+    rm = np.linalg.norm(r, axis=0)
+    to_sun = sun - r
+    ds = np.linalg.norm(to_sun, axis=0)
+    psi = np.arccos(np.clip(np.sum(-r * to_sun, axis=0) / (rm * ds), -1, 1))
+    ae = np.arcsin(np.clip(RE_KM / rm, -1, 1))
+    asun = np.arcsin(np.clip(RS_KM / ds, -1, 1))
+    area = np.zeros_like(psi)
+    inner = psi <= np.abs(ae - asun)
+    area[inner] = np.pi * np.minimum(ae, asun)[inner] ** 2
+    lens = (~inner) & (psi < ae + asun)
+    d, r1, r2 = psi[lens], ae[lens], asun[lens]
+    t1 = (r1 * r1 - r2 * r2 + d * d) / (2 * d)
+    t2 = (r2 * r2 - r1 * r1 + d * d) / (2 * d)
+    q = np.maximum((-d + r1 + r2) * (d + r1 - r2) * (d - r1 + r2) * (d + r1 + r2), 0.0)
+    area[lens] = (r1 * r1 * np.arccos(np.clip(t1 / r1, -1, 1)) + r2 * r2 * np.arccos(np.clip(t2 / r2, -1, 1))
+                  - 0.5 * np.sqrt(q))
+    total = psi + asun <= ae
+    part = (~total) & (psi < ae + asun)
+    vis = np.clip(1.0 - area / (np.pi * asun ** 2), 0.0, 1.0)
+    sep = np.degrees(np.arccos(np.clip(np.sum(r * sun, axis=0) / (rm * np.linalg.norm(sun, axis=0)), -1, 1)))
+    return np.where(total, 2, np.where(part, 1, 0)), np.where(total, 0.0, vis), sep
+
+
+sh = {k: shadow(sat_r[k], sun_u * sun_d) for k in (1, 2, 3)}
+cens = shadow(rc, sun_u * sun_d)
+ecl_flag = sh[1][0] // 2
+print("   逐星地影：本影 %d s、半影 %d s、日面可见比例最小 %.4f；参考中心日下点角距最小 %.3f°"
+      "（报告：本影 0、半影 0、β=90°-该角距 78.259~78.639）"
+      % (int((sh[1][0] == 2).sum()), int((sh[1][0] == 1).sum()), sh[1][1].min(), cens[2].min()))
 
 print("6/7 目标入锥、地面投影、事件表")
 dir_t = {}
@@ -380,10 +415,11 @@ s_parts = []
 for k in (1, 2, 3):
     s_parts.append(pd.DataFrame({"sat_id": k, "rel_s": grid.astype(np.int64), "utcg": tstr,
         "sun_j2000_x": sun_u[0], "sun_j2000_y": sun_u[1], "sun_j2000_z": sun_u[2],
-        "incidence_deg": inc[k], "eclipse": ecl_flag, "sun_ratio": 1 - ecl_flag}))
+        "incidence_deg": inc[k], "eclipse": sh[k][0] // 2, "sun_ratio": sh[k][1],
+        "shadow_state": sh[k][0], "sun_sep_deg": sh[k][2]}))
 write("sun_eclipse.csv", pd.concat(s_parts),
-      ["-", "s", "UTC", "J2000", "J2000", "J2000", "本体+Z_B", "-", "-", "-"],
-      ["-", "s", "-", "-", "-", "-", "deg", "0~1", "0~1", "-"])
+      ["-", "s", "UTC", "J2000", "J2000", "J2000", "本体+Z_B", "0/1", "0~1", "0日照/1半影/2本影", "地心夹日角"],
+      ["-", "s", "-", "-", "-", "-", "deg", "-", "-", "-", "deg"])
 
 g_parts = []
 for k in (1, 2, 3):
@@ -431,7 +467,9 @@ common_runs = runs(common)
 meta = {"rows_per_sat": int(n_pts), "sats": 3, "edge0_km": float(e0),
         "station": {"name": "合肥", "lat_deg": HEFEI[1], "lon_deg": HEFEI[0], "alt_km": HEFEI[2]},
         "sun_inc_nominal_deg": [round(float(nom.min()), 3), round(float(nom.max()), 3)],
-        "eclipse_samples": int(ecl_flag.sum()),
+        "eclipse_samples": int((sh[1][0] == 2).sum()),
+        "penumbra_samples": int((sh[1][0] == 1).sum()),
+        "sun_sep_ref_center_deg": [round(float(cens[2].min()), 3), round(float(cens[2].max()), 3)],
         "common_windows_s": [[float(a_), float(b_)] for a_, b_ in common_runs],
         "generation_s": round(time.time() - t_start, 1),
         "note": "轨道=杨宏俊交付的 STK J2000 瞬时根数闭式重建（位置精确、速度近似）；姿态/太阳/显示=合成；参考中心用三星几何中心代替（参考中心列未交付）；事件与显示窗口由本数据集自洽生成",

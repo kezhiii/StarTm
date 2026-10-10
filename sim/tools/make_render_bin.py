@@ -31,7 +31,7 @@ SPEC = {
     "thermal": {"perSat": True, "num": ["ext_heatflux", "equip_power", "temp_main", "over_limit"]},
     "time_ident": {"perSat": False, "num": [], "txt": ["mission", "mode", "param_ver"]},
     "sun_eclipse": {"perSat": True, "num": ["sun_j2000_x", "sun_j2000_y", "sun_j2000_z",
-                                            "incidence_deg", "eclipse", "sun_ratio"]},
+                                            "incidence_deg", "eclipse", "sun_ratio", "shadow_state", "sun_sep_deg"]},
 }
 
 
