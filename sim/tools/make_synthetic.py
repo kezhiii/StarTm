@@ -265,7 +265,7 @@ def shadow(r, sun):
     part = (~total) & (psi < ae + asun)
     vis = np.clip(1.0 - area / (np.pi * asun ** 2), 0.0, 1.0)
     sep = np.degrees(np.arccos(np.clip(np.sum(r * sun, axis=0) / (rm * np.linalg.norm(sun, axis=0)), -1, 1)))
-    margin = rm * np.sin(psi) - RE_KM      # 到日地连线的垂距减地球半径：>0 即在本影之外
+    margin = rm * np.sin(psi) - RE_KM      # 地心到「卫星-太阳」连线的垂距减地球半径：>0 即地球挡不住日面
     return np.where(total, 2, np.where(part, 1, 0)), np.where(total, 0.0, vis), sep, margin
 
 
@@ -421,7 +421,7 @@ for k in (1, 2, 3):
         "incidence_deg": inc[k], "eclipse": sh[k][0] // 2, "sun_ratio": sh[k][1],
         "shadow_state": sh[k][0], "sun_sep_deg": sh[k][2], "umbra_margin_km": sh[k][3]}))
 write("sun_eclipse.csv", pd.concat(s_parts),
-      ["-", "s", "UTC", "J2000", "J2000", "J2000", "本体+Z_B", "0/1", "0~1", "0日照/1半影/2本影", "地心夹日角", "垂直日地连线"],
+      ["-", "s", "UTC", "J2000", "J2000", "J2000", "本体+Z_B", "0/1", "0~1", "0日照/1半影/2本影", "地心夹日角", "地心到星日连线垂距"],
       ["-", "s", "-", "-", "-", "-", "deg", "-", "-", "-", "deg", "km"])
 
 g_parts = []

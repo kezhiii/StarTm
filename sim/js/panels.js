@@ -119,16 +119,18 @@ function shadowBadge(epoch) {
     const cls = i === 0 ? 'ok' : i === 1 ? 'warn' : 'bad';
     const pct = ratio.kind === 'num' ? Math.round(ratio.n * 100) + '%' : '—';
     const sepTxt = sep.kind === 'num' ? sep.n.toFixed(2) + '°' : '—';
-    // 本影裕度 = 卫星到日地连线的垂距 − 地球半径。画面里卫星落到夜半球不等于进了地影：
-    // 600 km 轨道的垂距最小也有 6826 km，比地球半径 6378 km 大，侧向绕得过本体。
+    // 本影裕度 = 地心到「卫星—太阳」连线的垂距 − 地球半径，正数即地球遮不住日面。
+    // 画面里卫星落到夜半球不等于进了地影：600 km 轨道的垂距最小也有 6826 km，
+    // 比地球半径 6378 km 大，侧向绕得过本体。状态词只认 shadow_state，
+    // 裕度符号不作判定（晨侧垂距也可能小于地半径，那时并没有被遮挡）。
     const margin = mg.kind === 'num'
-        ? (mg.n >= 0 ? `距本影 ${Math.round(mg.n)} km` : `入本影 ${Math.round(-mg.n)} km`)
+        ? ` · 本影裕度 ${mg.n >= 0 ? '+' : ''}${Math.abs(mg.n) < 10 ? mg.n.toFixed(1) : Math.round(mg.n)} km`
         : '';
     const tip = `日面可见比例 ${pct}，日下点角距 ${sepTxt}，本影裕度`
         + `${mg.kind === 'num' ? ' ' + (mg.n >= 0 ? '+' : '') + Math.round(mg.n) + ' km' : ' —'}`
-        + '（卫星到日地连线的垂距减地球半径，>0 即在本影之外；画面上的夜半球不代表被遮挡）'
+        + '（地心到卫星—太阳连线的垂距减地球半径，>0 即在本影之外；画面上的夜半球不代表被遮挡）'
         + '——按卫星看日面与地面的圆盘遮挡判定';
-    return `<span class="tag ${cls}" title="${tip}"><i></i>光照 ${SHADOW_STATE[i] || st.text} · 日面 ${pct}${margin ? ' · ' + margin : ''}</span>`;
+    return `<span class="tag ${cls}" title="${tip}"><i></i>光照 ${SHADOW_STATE[i] || st.text} · 日面 ${pct}${margin}</span>`;
 }
 
 function renderBadges(epoch) {
