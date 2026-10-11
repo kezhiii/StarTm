@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { parseTimestamp, dateToJD, formatTimestamp, calcGMST } from '../modules/math-utils.js';
 import { placeGroundStationMarker } from '../modules/earth-rotation.js';
-import { THIRD_PERSON_CAMERA_POS, RE_3D } from '../modules/config.js';
+import { THIRD_PERSON_CAMERA_POS, RE_3D, SAT_SCALE } from '../modules/config.js';
 import { interpolateSatellites, updateSatellitesThirdPersonInterp, updateSatellitesFirstPersonInterp, updateSatellitesCenterPersonInterp } from '../modules/interpolation.js';
 import { sendWsCommand as sendWsCmd, updateWsStatus as updateWsSts } from '../core/ws-utils.js';
 import { updateSatellitesThirdPersonWs, updateThirdPersonDecor, updateTrajectoryLines } from '../modules/views/third-person.js';
@@ -1182,14 +1182,22 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
                 rings: (appState.sceneObjects.orbitRings || []).map((r, k) => {
                     const attr = r.geometry.attributes.position;
                     const mid = new THREE.Vector3().fromBufferAttribute(attr, Math.floor(attr.count / 2));
-                    const m = (appState.sceneObjects.satelliteMeshes3D || [])[k];
+                    const fr = (appState.csv.satelliteData || [])[csvState.currentTimeIdx];
+                    const sat = fr && fr.sats && fr.sats[k];
+                    const kmU = 6378.137 / RE_3D;
+                    const vL = new THREE.Vector3().fromBufferAttribute(attr, attr.count - 1);
+                    const v0 = new THREE.Vector3().fromBufferAttribute(attr, 0);
                     return {
                         v0: Array.from(attr.array.slice(0, 3)).map(v => +v.toFixed(2)),
                         col: r.material.color.getHexString(),
-                        // mid 应落在本星当前位置上：轨迹线直接连数据点，中心顶点取的就是当前历元；
-                        // 若画的是根数椭圆，中心顶点是真近点角 180°，gap 会是轨道量级而不是 ~0。
+                        // mid 应正好落在当前步的数据位置上：轨迹线直接连数据点。
+                        // 若画的是根数椭圆，中心顶点是真近点角 180°，gapKm 会是轨道量级而非 ~0。
                         mid: r3(mid.toArray()),
-                        gap: m ? +mid.distanceTo(m.position).toFixed(3) : null,
+                        gapKm: sat ? +(mid.distanceTo(new THREE.Vector3(
+                            sat.X * SAT_SCALE, sat.Z * SAT_SCALE, -sat.Y * SAT_SCALE)) * kmU).toFixed(2) : null,
+                        // 线的首尾相距一个轨道周期：近圆轨道下应只有 J2 漂移带来的几 km 缺口，
+                        // 若采样帧跨度算错会变成几百 km 甚至整圈重叠。
+                        closureKm: +((vL.distanceTo(v0)) * kmU).toFixed(1),
                     };
                 }),
                 term: (() => {
@@ -1198,22 +1206,38 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
                     const n = new THREE.Vector3(0, 0, 1).applyQuaternion(t.quaternion);
                     return n.toArray().map(v => +v.toFixed(3));
                 })(),
-                // 用画面几何反算本影裕度：与数据里的 umbra_margin_km 应当对得上，
-                // 对得上说明「画出来的影柱」和「星历算出来的遮挡」是同一件事。
+                // 用画面几何反算影柱裕度，用来核对「画出来的影柱」与星历判定是否同一件事。
+                // 位置取当前步的数据值而不是卫星模型：模型由 rAF 循环搬，标签页在后台时
+                // rAF 停摆，拿模型算会得出与走带无关的数（meshGapKm 就是那个停摆探针）。
+                // 口径差：这里量卫星到「地心—太阳」直线的垂距（点源影柱），数据的
+                // umbra_margin_km 用地心到「卫星—太阳」连线的垂距，差一个视差，
+                // 600 km 高度最大约 64 m，所以只核对到 0.1 km 量级而非逐位相同。
                 umbra: (() => {
                     const u = appState.sceneObjects.umbraOutline;
-                    const m = (appState.sceneObjects.satelliteMeshes3D || [])[0];
-                    if (!u || !sun || !m) return null;
-                    const km = 6378.137 / RE_3D;          // 1 场景单位 = 多少 km
-                    const s = sun.position.clone().normalize();
-                    const p = m.position.clone();
-                    const along = p.dot(s);
-                    const perp = Math.sqrt(Math.max(0, p.lengthSq() - along * along));
+                    const fr = (appState.csv.satelliteData || [])[csvState.currentTimeIdx];
+                    const sat = fr && fr.sats && fr.sats[0];
+                    if (!u || !sun || !sat) return null;
+                    const kmU = 6378.137 / RE_3D;              // 1 场景单位 = 多少 km
+                    // 场景轴 (x,y,z) ← J2000 (x, −z, y)，反向换轴才能与数据的 X/Y/Z 同轴运算
+                    const bx = sun.position.x, by = -sun.position.z, bz = sun.position.y;
+                    const bn = Math.hypot(bx, by, bz) || 1;
+                    const s = { x: bx / bn, y: by / bn, z: bz / bn };
+                    const along = sat.X * s.x + sat.Y * s.y + sat.Z * s.z;
+                    const rm = Math.hypot(sat.X, sat.Y, sat.Z);
+                    const perp = Math.sqrt(Math.max(0, rm * rm - along * along));
+                    const ay = new THREE.Vector3(0, 1, 0).applyQuaternion(u.quaternion);
+                    const a = { x: ay.x, y: -ay.z, z: ay.y };   // 影柱延伸方向，应等于 −s
+                    const mesh = (appState.sceneObjects.satelliteMeshes3D || [])[0];
                     return {
-                        axis: new THREE.Vector3(0, 1, 0).applyQuaternion(u.quaternion).toArray().map(v => +v.toFixed(3)),
-                        alongKm: +(along * km).toFixed(1),
-                        perpKm: +(perp * km).toFixed(1),
-                        edgeKm: +((perp - RE_3D) * km).toFixed(1),
+                        axisJ2000: [a.x, a.y, a.z].map(v => +v.toFixed(3)),
+                        alongKm: +along.toFixed(1),
+                        perpKm: +perp.toFixed(1),
+                        edgeKm: +(perp - 6378.137).toFixed(1),
+                        tipAlongKm: +((a.x * s.x + a.y * s.y + a.z * s.z) * 1.8 * 6378.137).toFixed(1),
+                        meshGapKm: mesh ? +Math.hypot(
+                            mesh.position.x * kmU - sat.X,
+                            -mesh.position.z * kmU - sat.Y,
+                            mesh.position.y * kmU - sat.Z).toFixed(1) : null,
                     };
                 })(),
                 lights: appState.lightManager

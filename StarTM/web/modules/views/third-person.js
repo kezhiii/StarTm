@@ -102,19 +102,27 @@ function frameStepSec(frames) {
 
 export function updateTrajectoryLines(sceneObjects, frames, idx) {
     const lines = sceneObjects.orbitRings;
-    if (!lines || !lines.length || !frames || !frames.length) return;
-    const stepSec = frameStepSec(frames);
-    const a0 = frames[Math.min(idx, frames.length - 1)].sats[0].a;         // km
+    if (!lines || !lines.length || !frames || frames.length < 2) return;
+    const cur = frames[Math.max(0, Math.min(idx, frames.length - 1))];
+    const a0 = cur && cur.sats && cur.sats[0] && cur.sats[0].a;
+    if (!Number.isFinite(a0)) return;
     const period = 2 * Math.PI * Math.sqrt(a0 * a0 * a0 / MU);             // s
-    const span = Math.round(period / stepSec / 2);                         // 半个轨道周期的帧数
-    const stride = Math.max(1, Math.round(span / (RING_STEPS / 2)));
+    // 帧偏移按小数取并线性内插：60 s 稀疏集也能正好铺满一个轨道周期，
+    // 整数 stride 向下取整会让覆盖圈数变成周期的数倍。
+    const half = period / frameStepSec(frames) / 2;                        // 半周期的帧数
+    const last = frames.length - 1;
     for (let i = 0; i < lines.length; i++) {
         const attr = lines[i].geometry.attributes.position;
         for (let k = 0; k <= RING_STEPS; k++) {
-            const fi = Math.max(0, Math.min(frames.length - 1, idx + (k - RING_STEPS / 2) * stride));
-            const sat = frames[fi] && frames[fi].sats && frames[fi].sats[i];
-            if (!sat) continue;
-            attr.setXYZ(k, sat.X * SAT_SCALE, sat.Z * SAT_SCALE, -sat.Y * SAT_SCALE);
+            const f = idx + (k - RING_STEPS / 2) / (RING_STEPS / 2) * half;
+            const f0 = Math.floor(f), u = f - f0;
+            const sa = frames[Math.max(0, Math.min(last, f0))].sats[i];
+            const sb = frames[Math.max(0, Math.min(last, f0 + 1))].sats[i];
+            if (!sa || !sb) continue;
+            attr.setXYZ(k,
+                (sa.X + (sb.X - sa.X) * u) * SAT_SCALE,
+                (sa.Z + (sb.Z - sa.Z) * u) * SAT_SCALE,
+                -(sa.Y + (sb.Y - sa.Y) * u) * SAT_SCALE);
         }
         attr.needsUpdate = true;
         lines[i].geometry.computeBoundingSphere();
@@ -150,6 +158,7 @@ export function buildTerminator() {
  * 画它是因为「卫星在夜半球上方」和「卫星进了地影」在画面上看着一样：600 km 轨道
  * 到日地连线的垂距始终大于地球半径，轮廓能把这层区别直接显示出来。
  * 前端开口那一圈正好落在晨昏线上，不重复画；只画远端封口与四条母线。
+ * 几何摆在局部 +Y 侧，updateThirdPersonDecor 把 +Y 对到背光方向。
  */
 const UMBRA_LEN = RE_3D * 1.8;
 export function buildUmbraOutline() {
@@ -158,14 +167,14 @@ export function buildUmbraOutline() {
     const rim = [];
     for (let k = 0; k <= 128; k++) {
         const th = k / 128 * Math.PI * 2;
-        rim.push(new THREE.Vector3(Math.cos(th) * RE_3D, -UMBRA_LEN, Math.sin(th) * RE_3D));
+        rim.push(new THREE.Vector3(Math.cos(th) * RE_3D, UMBRA_LEN, Math.sin(th) * RE_3D));
     }
     grp.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(rim), mat));
     const gen = [];
     for (let j = 0; j < 4; j++) {
         const th = j * Math.PI / 2;
         const x = Math.cos(th) * RE_3D, z = Math.sin(th) * RE_3D;
-        gen.push(new THREE.Vector3(x, 0, z), new THREE.Vector3(x, -UMBRA_LEN, z));
+        gen.push(new THREE.Vector3(x, 0, z), new THREE.Vector3(x, UMBRA_LEN, z));
     }
     grp.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(gen), mat));
     grp.renderOrder = 1;
