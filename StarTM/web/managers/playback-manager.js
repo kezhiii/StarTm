@@ -1206,40 +1206,6 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
                     const n = new THREE.Vector3(0, 0, 1).applyQuaternion(t.quaternion);
                     return n.toArray().map(v => +v.toFixed(3));
                 })(),
-                // 用画面几何反算影柱裕度，用来核对「画出来的影柱」与星历判定是否同一件事。
-                // 位置取当前步的数据值而不是卫星模型：模型由 rAF 循环搬，标签页在后台时
-                // rAF 停摆，拿模型算会得出与走带无关的数（meshGapKm 就是那个停摆探针）。
-                // 口径差：这里量卫星到「地心—太阳」直线的垂距（点源影柱），数据的
-                // umbra_margin_km 用地心到「卫星—太阳」连线的垂距，差一个视差，
-                // 600 km 高度最大约 64 m，所以只核对到 0.1 km 量级而非逐位相同。
-                umbra: (() => {
-                    const u = appState.sceneObjects.umbraOutline;
-                    const fr = (appState.csv.satelliteData || [])[csvState.currentTimeIdx];
-                    const sat = fr && fr.sats && fr.sats[0];
-                    if (!u || !sun || !sat) return null;
-                    const kmU = 6378.137 / RE_3D;              // 1 场景单位 = 多少 km
-                    // 场景轴 (x,y,z) ← J2000 (x, −z, y)，反向换轴才能与数据的 X/Y/Z 同轴运算
-                    const bx = sun.position.x, by = -sun.position.z, bz = sun.position.y;
-                    const bn = Math.hypot(bx, by, bz) || 1;
-                    const s = { x: bx / bn, y: by / bn, z: bz / bn };
-                    const along = sat.X * s.x + sat.Y * s.y + sat.Z * s.z;
-                    const rm = Math.hypot(sat.X, sat.Y, sat.Z);
-                    const perp = Math.sqrt(Math.max(0, rm * rm - along * along));
-                    const ay = new THREE.Vector3(0, 1, 0).applyQuaternion(u.quaternion);
-                    const a = { x: ay.x, y: -ay.z, z: ay.y };   // 影柱延伸方向，应等于 −s
-                    const mesh = (appState.sceneObjects.satelliteMeshes3D || [])[0];
-                    return {
-                        axisJ2000: [a.x, a.y, a.z].map(v => +v.toFixed(3)),
-                        alongKm: +along.toFixed(1),
-                        perpKm: +perp.toFixed(1),
-                        edgeKm: +(perp - 6378.137).toFixed(1),
-                        tipAlongKm: +((a.x * s.x + a.y * s.y + a.z * s.z) * 1.8 * 6378.137).toFixed(1),
-                        meshGapKm: mesh ? +Math.hypot(
-                            mesh.position.x * kmU - sat.X,
-                            -mesh.position.z * kmU - sat.Y,
-                            mesh.position.y * kmU - sat.Z).toFixed(1) : null,
-                    };
-                })(),
                 lights: appState.lightManager
                     ? [...appState.lightManager.getAllStates().entries()].filter(([, s]) => s.isOn).map(([i]) => i)
                     : null,

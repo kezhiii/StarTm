@@ -50,7 +50,7 @@ export function clearSceneObjects(scene, camera, appState) {
     so.earth = null; so.earthGroup = null; so.groundStationMarker3D = null;
     so.horizonPlane = null; so.horizonRing = null; so.groundStationMarker1D = null;
     so.centerSatMarker = null; so.earthRef = null; so.gridGroup = null; so.arrowGroup = null;
-    so.selectionRing = null; so.terminator = null; so.umbraOutline = null;
+    so.selectionRing = null; so.terminator = null;
 }
 
 /**
