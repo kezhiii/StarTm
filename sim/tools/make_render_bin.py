@@ -28,10 +28,12 @@ SPEC = {
                                         "effective", "freq_hz", "duty", "brightness"]},
     "power": {"perSat": True, "num": ["gen_power", "platform_power", "payload_power",
                                       "accum_energy", "battery_margin"]},
-    "thermal": {"perSat": True, "num": ["ext_heatflux", "equip_power", "temp_main", "over_limit"]},
+    "thermal": {"perSat": True, "num": ["ext_heatflux", "equip_power", "temp_main", "over_limit_count"]},
     "time_ident": {"perSat": False, "num": [], "txt": ["mission", "mode", "param_ver"]},
     "sun_eclipse": {"perSat": True, "num": ["sun_j2000_x", "sun_j2000_y", "sun_j2000_z",
-                                            "incidence_deg", "eclipse", "sun_ratio", "shadow_state", "sun_sep_deg", "umbra_margin_km"]},
+                                            "incidence_deg", "eclipse", "sun_ratio", "shadow_state", "sun_sep_deg", "umbra_margin_km",
+                                            "array_normal_x", "array_normal_y", "array_normal_z",
+                                            "array_incidence_deg", "array_proj_factor"]},
 }
 
 

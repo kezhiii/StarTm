@@ -200,7 +200,7 @@ def q_mul(a, b):   # a⊗b，先 b 后 a
                      aw*bw - ax*bx - ay*by - az_*bz], axis=-1)
 
 def q_conj(q):
-    c = q.copy(); c[:3] *= -1; return c
+    c = q.copy(); c[..., :3] *= -1; return c     # 共轭=矢量部取反，按最后一轴取前三分量
 
 def q_rot(q, v):   # J2000→body：v_body = q v q*
     w = q[..., 3:4]; u_ = q[..., :3]
@@ -230,8 +230,25 @@ qm[mask | (grid > MAN_T1), 3] = np.cos(ang[mask | (grid > MAN_T1)] / 2)
 q_j2b_m = q_mul(qm, q_j2b)
 assert np.allclose(np.linalg.norm(q_j2b_m, axis=1), 1.0, atol=1e-12)
 
-sun_b = {k: q_rot(q_conj(q_j2b_m), sun_u.T) for k in (1, 2, 3)}
+sun_b = {k: q_rot(q_j2b_m, sun_u.T) for k in (1, 2, 3)}   # R(q) 是 J2000→body，直接旋转即得本体分量
 inc = {k: np.degrees(np.arccos(np.clip(sun_b[k][:, 2], -1, 1))) for k in (1, 2, 3)}
+
+# 表3-6「太阳几何」要求输出太阳翼法向，「地影状态」要求输出有效投影系数。
+# 法向按方案 4.1 布局取本体 +Z_B：太阳翼沿 ±Y 展开，Y 在面板平面内，法向只能垂直 Y_B；
+# 实测该轨道太阳几乎顺 Y_B 来，+Z_B 已是固定法向里投影最优的一档。
+_arr_n = q_rot(q_conj(q_j2b_m), np.tile([0.0, 0.0, 1.0], (n_pts, 1)))   # R(q)^T 是 body→J2000，本体 +Z_B 在 J2000 下即天顶
+_arr_n = _arr_n / np.linalg.norm(_arr_n, axis=1)[:, None]
+arr_cos = np.einsum("ij,ij->i", _arr_n, sun_u.T)
+# 两条独立校验：①与交付的 incidence_deg 同口径（恒等式 (R^T s)·e3 = s·(R e3)）；
+# ②对地定向 ⇒ 法向就是当地天顶，与径向单位矢量的点积应恒为 1。
+assert np.allclose(arr_cos, sun_b[1][:, 2], atol=1e-9), "法向口径与入射角不一致"
+_zen = np.einsum("ij,ij->i", _arr_n, Rhat.T)
+assert np.allclose(_zen[grid < MAN_T0], 1.0, atol=1e-9), "机动前法向不是天顶"
+assert _zen.min() > math.cos(math.radians(MAN_DEG)) - 1e-6, f"法向偏离天顶超过机动角：{_zen.min():.6f}"
+print(f"   法向与天顶点积 最小 {_zen.min():.6f}（=cos{MAN_DEG}°，机动后），机动前恒 1")
+array_inc = np.degrees(np.arccos(np.clip(arr_cos, -1, 1)))
+array_proj = np.abs(arr_cos)
+print(f"   太阳翼有效投影系数 平均 {array_proj.mean():.4f}，最小 {array_proj.min():.4f}，最大 {array_proj.max():.4f}")
 nom = inc[2][~mask & (grid < MAN_T0)]
 print(f"   名义入射角范围 {nom.min():.3f}° ~ {nom.max():.3f}°（理论 90°±(90°-β)）")
 assert 77.0 < nom.min() < 79.5 and 100.5 < nom.max() < 102.5
@@ -287,7 +304,10 @@ for k in (1, 2, 3):
     d = obs_g - sat_r[k]
     dir_t[k] = (d / np.linalg.norm(d, axis=0)).T          # (n,3)
     off_axis[k] = np.degrees(np.arccos(np.clip(np.sum(bore * dir_t[k], axis=1), -1, 1)))
-incone = {k: off_axis[k] <= CONE_DEG for k in (1, 2, 3)}
+# 入锥必须同时要求测站在地平以上：光轴是一条直线，星下点在合肥附近与在合肥的对跖点
+# 都会让夹角趋近 0（实测 20772~20837 s 斜距 13343 km、仰角 −89.8°，夹角只有 0.067°），
+# 只看角度会把"地球另一面"误判成入锥。
+incone = {k: (off_axis[k] <= CONE_DEG) & (el[k] >= 0) for k in (1, 2, 3)}
 
 kvec = np.zeros((3, n_pts))
 for k in (1, 2, 3):
@@ -317,6 +337,20 @@ def runs(flag):
 for k in (1, 2, 3):
     for a_, b_ in runs(vis[k]):
         add_ev("可见区间", SAT[k], a_, b_, f"仰角>={EL_MIN}")
+# 表3-6「地影状态」行要求"连续状态与进出地影事件同时输出"。本轨道全程日照，
+# 这里跑出来是 0 条属正常；接线必须在，否则换轨道真进影时界面上不会有任何动静。
+SH_NAME = {1: "半影", 2: "本影"}
+for k in (1, 2, 3):
+    st = sh[k][0]
+    for i in np.flatnonzero(np.diff(st) != 0) + 1:
+        prev, cur = int(st[i - 1]), int(st[i])
+        mgn = float(sh[k][3][i])
+        if cur > prev:
+            add_ev("进地影", SAT[k], grid[i], grid[i],
+                   f"进入{SH_NAME[cur]}，本影裕度 {mgn:+.1f} km")
+        else:
+            add_ev("出地影", SAT[k], grid[i], grid[i],
+                   f"离开{SH_NAME[prev]}，本影裕度 {mgn:+.1f} km")
 for a_, b_ in runs(common):
     add_ev("转向", "ALL", a_ - TURN, a_, "显示前转向准备")
     add_ev("显示任务", "ALL", a_, b_, "三星共同可见")
@@ -419,10 +453,13 @@ for k in (1, 2, 3):
     s_parts.append(pd.DataFrame({"sat_id": k, "rel_s": grid.astype(np.int64), "utcg": tstr,
         "sun_j2000_x": sun_u[0], "sun_j2000_y": sun_u[1], "sun_j2000_z": sun_u[2],
         "incidence_deg": inc[k], "eclipse": sh[k][0] // 2, "sun_ratio": sh[k][1],
-        "shadow_state": sh[k][0], "sun_sep_deg": sh[k][2], "umbra_margin_km": sh[k][3]}))
+        "shadow_state": sh[k][0], "sun_sep_deg": sh[k][2], "umbra_margin_km": sh[k][3],
+        "array_normal_x": _arr_n[:, 0], "array_normal_y": _arr_n[:, 1], "array_normal_z": _arr_n[:, 2],
+        "array_incidence_deg": array_inc, "array_proj_factor": array_proj}))
 write("sun_eclipse.csv", pd.concat(s_parts),
-      ["-", "s", "UTC", "J2000", "J2000", "J2000", "本体+Z_B", "0/1", "0~1", "0日照/1半影/2本影", "地心夹日角", "地心到星日连线垂距"],
-      ["-", "s", "-", "-", "-", "-", "deg", "-", "-", "-", "deg", "km"])
+      ["-", "s", "UTC", "J2000", "J2000", "J2000", "本体+Z_B", "0/1", "0~1", "0日照/1半影/2本影", "地心夹日角", "地心到星日连线垂距",
+       "J2000", "J2000", "J2000", "太阳翼法向", "太阳翼法向"],
+      ["-", "s", "-", "-", "-", "-", "deg", "-", "-", "-", "deg", "km", "无量纲", "无量纲", "无量纲", "deg", "0~1"])
 
 g_parts = []
 for k in (1, 2, 3):
@@ -450,12 +487,19 @@ write("display.csv", pd.concat(d_parts),
       ["-", "s", "UTC", "-", "计划", "执行", "有效", "Hz", "0~1", "0~1"],
       ["-", "s", "-", "0/1", "0/1", "0/1", "0/1", "Hz", "-", "-"])
 
-for nm, cols in (("power.csv", ["gen_power", "platform_power", "payload_power", "accum_energy", "battery_margin"]),
-                 ("thermal.csv", ["ext_heatflux", "equip_power", "temp_main", "over_limit"])):
+# 占位文件：值一律留空（坐标系行写"未计算"），但单位必须给全——接口 §一 要求
+# 每列同时标坐标系与单位，对方照这份文件对格式，空着单位等于让人猜口径。
+PLACEHOLDER = {
+    "power.csv": (["gen_power", "platform_power", "payload_power", "accum_energy", "battery_margin"],
+                  ["W", "W", "W", "Wh", "%"]),
+    "thermal.csv": (["ext_heatflux", "equip_power", "temp_main", "over_limit_count"],
+                    ["W/m2", "W", "degC", "个"]),
+}
+for nm, (cols, units) in PLACEHOLDER.items():
     df = idx.copy()
     for c in cols:
         df[c] = np.nan
-    write(nm, df, ["-", "s", "UTC"] + ["未计算"] * len(cols), ["-", "s", "-"] + [""] * len(cols))
+    write(nm, df, ["-", "s", "UTC"] + ["未计算"] * len(cols), ["-", "s", "-"] + units)
 
 write("flight_ctrl.csv",
       pd.DataFrame({"sat_id": [1, 2, 3], "rel_s": [int(MAN_T0)]*3, "utcg": [utcg(int(MAN_T0))]*3,
@@ -465,6 +509,53 @@ write("flight_ctrl.csv",
       ["-", "s", "UTC", "RTN", "RTN", "RTN", "RTN", "RTN", "RTN", "-", "-"],
       ["-", "s", "-", "m/s²", "m/s²", "m/s²", "m/s²", "m/s²", "m/s²", "次", "m/s"])
 events_df.to_csv(f"{OUT}/events.csv", index=False, float_format="%.9g")
+
+# ── 设备工作表 equipment_duty.csv ────────────────────────────────────
+# 能源的用电侧与热控的热输入侧的唯一共同源（接口定义 §三）。
+# 功率与发热一律取自 sim/config/equipment.csv（方案 4.3 逐台原值，本脚本不改数）；
+# 启停剖面（谁在哪段工作）是我方占位假设，真排程到位后整文件替换。
+eq = pd.read_csv("sim/config/equipment.csv", skiprows=[0, 1, 2, 3], dtype=str).iloc[2:].reset_index(drop=True)
+assert len(eq) == 78, f"设备清单应 78 台，实得 {len(eq)}"
+DISP = [(int(a_), int(b_)) for a_, b_ in runs(common)]
+
+def _complement(wins, hi):
+    out, cur = [], 0
+    for a_, b_ in wins:
+        if a_ > cur:
+            out.append((cur, a_ - 1))
+        cur = max(cur, b_ + 1)
+    if cur <= hi:
+        out.append((cur, hi))
+    return out
+
+def _profile(sub, name):
+    if "加热器" in name:
+        return [(0, DUR, "待机")]          # 加热器按电池/光学温度启停，本场景全程日照不投入
+    if sub == "AI计算载荷":
+        return [(a, b, "工作") for a, b in _complement(DISP, DUR)] + [(a, b, "退出") for a, b in DISP]
+    if sub == "发光演示载荷":
+        return [(a, b, "工作") for a, b in DISP] + [(a, b, "退出") for a, b in _complement(DISP, DUR)]
+    if sub == "高速数传":
+        return [(0, DUR, "待机")]          # 无数传排程数据
+    if sub in ("霍尔推进", "机构类"):
+        return [(0, DUR, "退出")]          # 无推进与展开动作
+    return [(0, DUR, "工作")]
+
+duty = []
+for _, e in eq.iterrows():
+    for a_, b_, mode in sorted(_profile(e["subsystem"], e["equip_name"])):
+        for sid in (1, 2, 3):
+            duty.append({"sat_id": sid, "equip_id": e["equip_id"], "equip_name": e["equip_name"],
+                         "subsystem": e["subsystem"], "t_start": a_, "t_end": b_,
+                         "duration_s": b_ - a_ + 1, "duty_mode": mode,
+                         "standby_w": e["standby_w"], "normal_w": e["normal_w"], "peak_w": e["peak_w"],
+                         "sunlit_avg_w": e["sunlit_avg_w"], "eclipse_avg_w": e["eclipse_avg_w"],
+                         "heat_w": e["heat_w"]})
+duty_df = pd.DataFrame(duty).sort_values(["sat_id", "equip_id", "t_start"]).reset_index(drop=True)
+write("equipment_duty.csv", duty_df,
+      ["-", "-", "-", "-", "s", "s", "s", "任务时间基准", "-", "-", "-", "-", "-", "-"],
+      ["-", "-", "-", "-", "-", "-", "-", "-", "W", "W", "W", "W", "W", "W"])
+print(f"   设备工作表 {len(duty_df)} 段，显示任务窗口 {len(DISP)} 个：{DISP}")
 
 common_runs = runs(common)
 meta = {"rows_per_sat": int(n_pts), "sats": 3, "edge0_km": float(e0),

@@ -207,9 +207,9 @@
         },
         {
           "file": "thermal",
-          "field": "over_limit",
-          "name": "超限标志",
-          "unit": "0/1",
+          "field": "over_limit_count",
+          "name": "超限节点数",
+          "unit": "个",
           "ref": "表3-6 热状态"
         }
       ],
