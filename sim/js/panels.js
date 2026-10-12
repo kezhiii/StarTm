@@ -1,5 +1,5 @@
-import { loadCategory, getValue, getStepSec, lastSecond } from './loader.js?v=29';
-import { createChart } from './chart.js?v=29';
+import { loadCategory, getValue, getStepSec, lastSecond } from './loader.js?v=30';
+import { createChart } from './chart.js?v=30';
 
 const $ = (id) => document.getElementById(id);
 const SERIES_COLORS = ['#7fe3d6', '#6fa8dc', '#9db2c6'];
@@ -126,7 +126,9 @@ function shadowBadge(epoch) {
     const margin = mg.kind === 'num'
         ? ` · 本影裕度 ${mg.n >= 0 ? '+' : ''}${Math.abs(mg.n) < 10 ? mg.n.toFixed(1) : Math.round(mg.n)} km`
         : '';
-    const tip = `日面可见比例 ${pct}，日下点角距 ${sepTxt}，本影裕度`
+    const pf = read('sun_eclipse', 'array_proj_factor', selectedSat, epoch, 1);
+    const tip = `日面可见比例 ${pct}，日下点角距 ${sepTxt}，有效投影系数`
+        + `${pf.kind === 'num' ? ' ' + pf.n.toFixed(3) : ' —'}，本影裕度`
         + `${mg.kind === 'num' ? ' ' + (mg.n >= 0 ? '+' : '') + Math.round(mg.n) + ' km' : ' —'}`
         + '（地心到卫星—太阳连线的垂距减地球半径，>0 即在本影之外；画面上的夜半球不代表被遮挡）'
         + '——按卫星看日面与地面的圆盘遮挡判定';
