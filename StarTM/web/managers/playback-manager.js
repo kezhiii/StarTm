@@ -1128,6 +1128,33 @@ export function createPlaybackManager(appState, engine, viewManager, modules, ca
             if (a) a.value = lat;
             if (b) b.value = lon;
         },
+        /** 当前步各星的六根数与速度：外层页面的"轨道"页要显示高度与速度，
+         *  它自己不再解析 38 MB 的 14 列 CSV。 */
+        orbitAt(i) {
+            const g = (appState.csv.satelliteData || [])[i];
+            if (!g) return null;
+            return g.sats.map(s => ({ a: s.a, Vx: s.Vx, Vy: s.Vy, Vz: s.Vz }));
+        },
+        /** 图层开关。返回 false 表示这一层三维侧还没实现，调用方要如实告知用户。 */
+        setLayer(name, on) {
+            const so = appState.sceneObjects;
+            const vis = !!on;
+            switch (name) {
+                case 'trails':
+                    (so.orbitRings || []).forEach(r => { r.visible = vis; });
+                    return true;
+                case 'terminator':
+                    if (so.terminator) so.terminator.visible = vis;
+                    return true;
+                case 'labels':
+                    (so.satelliteMeshes3D || []).forEach(m => m.children.forEach(c => {
+                        if (c.isSprite) c.visible = vis;
+                    }));
+                    return true;
+                default:                                    // gtrack / links 待实现
+                    return false;
+            }
+        },
         selectSat(satIdx) {
             appState.sceneObjects.selectedSatIdx = (satIdx == null) ? null : satIdx;
             updateThirdPersonDecor(appState.sceneObjects, camera);
