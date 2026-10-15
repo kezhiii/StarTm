@@ -3,33 +3,42 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>天幕卫星 V0 · 任务仿真工作台</title>
+<title>天幕卫星仿真系统</title>
 <style>
-  /* ── 令牌：颜色只表达一种含义 ───────────────────── */
+  /* ── 令牌：一种颜色只回答一件事 ─────────────────── */
   :root {
     color-scheme: dark;
-    --sel:    #7fe3d6;   /* 选中目标、当前读数 */
-    --actual: #6fa8dc;   /* 实际值、实际轨迹 */
+    /* 状态与语义 */
+    --sel:    #7fe3d6;   /* 当前选中、主要交互 */
     --plan:   #8a9aab;   /* 规划值、标称 */
-    --event:  #e8a33d;   /* 事件与可见窗口 */
+    --event:  #e8a33d;   /* 可见窗口与事件 */
     --bad:    #d8604b;   /* 超限、失败 */
-    --na:     #8ba0b3;   /* 未接入 / 尚未计算：这类文字必须比正文更容易被认出是「没有数据」 */
+    --na:     #8ba0b3;   /* 未接入 / 未计算 / 暂不可用：要比正文更像"没有数据" */
+    /* 三星身份色：跨三维线、列表、图例、曲线一致。状态一律带文字，不靠颜色单独表达 */
+    --sat1:   #7fe3d6;
+    --sat2:   #6fa8dc;
+    --sat3:   #e8a33d;
+    /* 面与线 */
     --txt:    #d5e2ee;
     --label:  #9db2c6;
     --dim:    #6a8095;
     --bg:     #04080d;
-    --panel:  rgba(9, 16, 24, .92);
+    --panel:  rgba(9, 16, 24, .93);
+    --raise:  rgba(14, 24, 34, .96);
     --line:   #16232f;
     --line-hot: #2e4a5f;
     --num: "Bahnschrift SemiCondensed", "Bahnschrift", Consolas, "Segoe UI", monospace;
     --cn: "HarmonyOS Sans SC", "Source Han Sans SC", "Microsoft YaHei", sans-serif;
-    --rail: 224px;
-    --console: 352px;
+    --top: 56px;
+    --rail: 300px;
+    --console: 360px;
+    --transport: 116px;
   }
   * { box-sizing: border-box; margin: 0; }
   html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
                font: 12.5px/1.55 var(--cn); color: var(--txt); }
   button, input, select { font-family: inherit; color: inherit; }
+  [hidden] { display: none !important; }
 
   #stage { position: fixed; inset: 0; width: 100vw; height: 100vh; border: 0; background: #000; }
   #vignette { position: fixed; inset: 0; pointer-events: none;
@@ -45,62 +54,95 @@
   .tag.na { color: var(--na); border-color: #223141; }
   .tag i { width: 5px; height: 5px; background: currentColor; }
 
-  /* ── 顶栏：全局状态 ─────────────────────────────── */
-  #topbar { top: 0; left: 0; right: 0; height: 46px; display: flex; align-items: center; gap: 14px;
-            padding: 0 14px; border-left: 0; border-right: 0; border-top: 0; z-index: 5; }
-  #topbar .sys { font: 600 15px/1 var(--cn); letter-spacing: .02em; color: #e6f1fa; }
-  #topbar .sys small { display: block; margin-top: 3px; font: 11px var(--cn); color: var(--dim); letter-spacing: 0; }
-  #topbar .sep { width: 1px; height: 22px; background: var(--line); }
-  #topbar .grow { flex: 1; }
-  #topbar .clockmini { text-align: right; font: 12px var(--num); color: var(--label); letter-spacing: .02em; }
-  #topbar .clockmini b { display: block; font-size: 14px; color: var(--txt); }
-  .ghostbtn { padding: 6px 10px; font: 12px var(--cn); color: var(--label); background: transparent;
-              border: 1px solid var(--line); cursor: pointer; }
-  .ghostbtn:hover { color: var(--sel); border-color: var(--line-hot); }
-  .ghostbtn:focus-visible, .btn:focus-visible, .seg button:focus-visible,
-  .tgt:focus-visible, input:focus-visible, summary:focus-visible {
+  /* ── 顶栏 ───────────────────────────────────────── */
+  #topbar { top: 0; left: 0; right: 0; height: var(--top); display: flex; align-items: center; gap: 12px;
+            padding: 0 14px; border-left: 0; border-right: 0; border-top: 0; z-index: 6; }
+  #topbar .sys { display: flex; align-items: center; gap: 9px; font: 600 15px/1.1 var(--cn); color: #e6f1fa; }
+  #topbar .sys .mark { width: 22px; height: 22px; border: 1px solid var(--sel); border-radius: 50%;
+                       position: relative; flex: none; }
+  #topbar .sys .mark::after { content: ''; position: absolute; inset: 6px; border-radius: 50%; background: var(--sel); }
+  #topbar .sep { width: 1px; height: 26px; background: var(--line); flex: none; }
+  #topbar .grow { flex: 1; min-width: 8px; }
+  .scenename { font: 12px var(--cn); color: var(--dim); }
+  .scenename b { display: block; font: 13px var(--num); color: var(--label); letter-spacing: .02em; }
+  .clockhead { text-align: right; font: 12px var(--num); color: var(--label); letter-spacing: .02em; }
+  .clockhead b { display: block; font-size: 15px; color: var(--txt); }
+  .ghostbtn { padding: 7px 10px; font: 12px var(--cn); color: var(--label); background: transparent;
+              border: 1px solid var(--line); cursor: pointer; white-space: nowrap; }
+  .ghostbtn:hover:not(:disabled) { color: var(--sel); border-color: var(--line-hot); background: rgba(43,74,100,.28); }
+  .ghostbtn:disabled { color: var(--dim); cursor: not-allowed; opacity: .6; }
+  .ghostbtn:focus-visible, .btn:focus-visible, .chip:focus-visible, .tabs button:focus-visible,
+  .tgt:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible {
     outline: 1px solid var(--sel); outline-offset: 1px; }
 
-  /* ── 左栏：目标与任务状态 ───────────────────────── */
-  #rail { top: 46px; left: 0; bottom: 96px; width: var(--rail); border-left: 0; border-bottom: 0;
-          display: flex; flex-direction: column; overflow-y: auto; }
+  /* ── 左栏 ───────────────────────────────────────── */
+  #rail { top: var(--top); left: 0; bottom: var(--transport); width: var(--rail);
+          border-left: 0; border-bottom: 0; display: flex; flex-direction: column; overflow-y: auto;
+          scrollbar-width: thin; scrollbar-color: var(--line-hot) transparent; }
+  #rail::-webkit-scrollbar { width: 7px; }
+  #rail::-webkit-scrollbar-thumb { background: var(--line-hot); }
   .hd { padding: 9px 12px; font: 600 12px var(--cn); letter-spacing: .05em; color: #a2bad0;
         border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 7px; }
-  .hd::before { content: ''; width: 2px; height: 12px; background: var(--sel); }
   .hd .r { margin-left: auto; font: 11px var(--num); color: var(--dim); letter-spacing: 0; }
+  .sec { padding: 9px 12px; border-bottom: 1px solid var(--line); }
+  .sec .row { display: flex; align-items: center; gap: 8px; }
+  .sec label { font: 11px var(--cn); color: var(--dim); }
+  select { background: rgba(11,19,28,.8); border: 1px solid var(--line-hot); color: var(--txt);
+           font: 12px var(--cn); padding: 4px 6px; }
+
   .tgt { display: block; width: 100%; text-align: left; padding: 9px 12px; background: transparent;
-         border: 0; border-bottom: 1px solid var(--line); border-left: 2px solid transparent; cursor: pointer; }
+         border: 0; border-bottom: 1px solid var(--line); border-left: 3px solid transparent; cursor: pointer; }
   .tgt:hover { background: rgba(43, 74, 100, .28); }
-  .tgt[aria-current="true"] { border-left-color: var(--sel); background: rgba(127, 227, 214, .07); }
+  .tgt[aria-current="true"] { background: rgba(127, 227, 214, .07); }
   .tgt .n { display: flex; align-items: center; gap: 7px; font: 14px var(--num); letter-spacing: .03em; color: #dceaf5; }
-  .tgt .n .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--na); }
-  .tgt[aria-current="true"] .n { color: var(--sel); }
-  .tgt .g { display: flex; gap: 12px; margin-top: 3px; font: 12px var(--num); color: var(--label);
-            font-variant-numeric: tabular-nums; }
-  .tgt .g em { font-style: normal; color: var(--dim); font-size: 10.5px; }
-  .sum { padding: 4px 12px 10px; }
+  .tgt .n .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--satc, var(--na)); flex: none; }
+  .tgt .st { margin-left: auto; font: 11.5px var(--cn); color: var(--sel); }
+  .tgt .st.na { color: var(--na); }
+  .tgt .st.bad { color: var(--bad); }
+  .tgt .g { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 5px; font: 12px var(--num);
+            color: var(--label); font-variant-numeric: tabular-nums; }
+  .tgt .g em { font-style: normal; color: var(--dim); font-size: 10.5px; margin-right: 3px; }
   .kv { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 4px 0;
         font-size: 11.5px; color: var(--dim); }
   .kv b { font: 13px var(--num); font-weight: 500; color: var(--label); font-variant-numeric: tabular-nums; }
   .kv b.ok { color: var(--sel); }
   .kv b.bad { color: var(--bad); }
-  .note { padding: 8px 12px; font-size: 11px; color: var(--na); border-top: 1px solid var(--line); }
+  .note { padding: 8px 12px; font-size: 11px; color: var(--na); line-height: 1.6; }
+  .pending { padding: 9px 12px; font-size: 11.5px; color: var(--na); line-height: 1.65; }
+  .pending ul { margin: 5px 0 0 15px; }
 
-  /* ── 右栏：选中目标 + 趋势 + 折叠区 ─────────────── */
-  #console { top: 46px; right: 0; bottom: 96px; width: var(--console); border-right: 0; border-bottom: 0;
-             display: flex; flex-direction: column; }
+  /* ── 右栏 ───────────────────────────────────────── */
+  #console { top: var(--top); right: 0; bottom: var(--transport); width: var(--console);
+             border-right: 0; border-bottom: 0; display: flex; flex-direction: column; }
+  .tabs { display: flex; border-bottom: 1px solid var(--line); background: rgba(7,13,20,.6); flex: none; }
+  .tabs button { flex: 1; padding: 10px 2px; font: 12px var(--cn); color: var(--label);
+                 background: transparent; border: 0; border-bottom: 2px solid transparent; cursor: pointer; }
+  .tabs button:hover { color: #eaf3fa; }
+  .tabs button[aria-selected="true"] { color: var(--sel); border-bottom-color: var(--sel); }
   #console .body { flex: 1; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--line-hot) transparent; }
   #console .body::-webkit-scrollbar { width: 7px; }
   #console .body::-webkit-scrollbar-thumb { background: var(--line-hot); }
   .hero { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line); }
   .hero .cell { background: rgba(11, 19, 28, .6); padding: 10px 12px; }
   .hero .k { font: 11px var(--cn); color: var(--dim); }
-  .hero .v { margin-top: 2px; font: 26px/1.05 var(--num); color: var(--sel); font-variant-numeric: tabular-nums;
-             letter-spacing: .01em; }
+  .hero .v { margin-top: 2px; font: 24px/1.05 var(--num); color: var(--sel); font-variant-numeric: tabular-nums; }
   .hero .v u { text-decoration: none; font-size: 12px; color: var(--dim); margin-left: 4px; }
-  .hero .v.na { color: var(--na); font-size: 17px; }
+  .hero .v.na { color: var(--na); font-size: 15px; }
   .hero .v.bad { color: var(--bad); }
   .strip { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+
+  /* 三星关键指标对比 */
+  .cmp { border-bottom: 1px solid var(--line); }
+  .cmp table { width: 100%; border-collapse: collapse; }
+  .cmp th, .cmp td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: right; }
+  .cmp th { font: 13px var(--num); letter-spacing: .03em; color: var(--satc, var(--label)); font-weight: 500; }
+  .cmp td:first-child, .cmp th:first-child { text-align: left; color: var(--dim); font: 11px var(--cn); }
+  .cmp td { font: 14px var(--num); color: var(--txt); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .cmp td.na { color: var(--na); font-size: 11.5px; }
+  .cmp td.bad { color: var(--bad); }
+  .cmp td.ok { color: var(--sel); }
+  .cmp .bar { display: block; height: 2px; margin-top: 3px; background: var(--satc, var(--sel)); opacity: .8; }
+
   details { border-bottom: 1px solid var(--line); }
   summary { padding: 9px 12px; font: 600 12px var(--cn); letter-spacing: .04em; color: #a2bad0;
             cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; }
@@ -134,22 +176,56 @@
   .legend i.sw.disp { background: var(--sel); }
   .legend i.dash { background: repeating-linear-gradient(90deg, currentColor 0 3px, transparent 3px 5px); }
   .legend b { color: var(--sel); font-weight: 500; }
-  #tip { position: fixed; z-index: 9; display: none; padding: 4px 7px; background: rgba(4, 9, 15, .95);
+  #tip { position: fixed; z-index: 20; display: none; padding: 4px 7px; background: rgba(4, 9, 15, .95);
          border: 1px solid var(--line-hot); font: 11.5px var(--num); color: var(--txt);
-         font-variant-numeric: tabular-nums; pointer-events: none; white-space: nowrap; }
+         font-variant-numeric: tabular-nums; pointer-events: none; white-space: nowrap; max-width: 320px; }
+  #toast { position: fixed; z-index: 21; left: 50%; bottom: calc(var(--transport) + 18px); transform: translateX(-50%);
+           display: none; padding: 8px 14px; background: var(--raise); border: 1px solid var(--line-hot);
+           font: 12.5px var(--cn); color: var(--txt); box-shadow: 0 8px 26px rgba(0,0,0,.6); }
+  #toast.bad { color: var(--bad); border-color: rgba(216,96,75,.55); }
 
-  /* ── 底部走带：播放 / 时间定位 / 视角 三组 ──────── */
-  #transport { left: 0; right: 0; bottom: 0; height: 96px; display: flex; align-items: stretch;
-               border-left: 0; border-right: 0; border-bottom: 0; z-index: 5; }
-  .grp { display: flex; flex-direction: column; justify-content: center; gap: 5px; padding: 9px 12px;
+  /* ── 三维区浮层：图例开关 + 视角工具 ─────────────── */
+  #sceneTools { position: fixed; z-index: 5; top: calc(var(--top) + 10px); pointer-events: none;
+                left: calc(var(--rail) + 12px); right: calc(var(--console) + 12px);
+                display: flex; align-items: flex-start; gap: 10px; }
+  body.tight #sceneTools { left: 12px; right: 12px; }
+  #layers { pointer-events: auto; display: flex; flex-direction: column; gap: 5px; padding: 8px 10px;
+            background: rgba(6,12,19,.72); border: 1px solid var(--line); }
+  #layers .chip { display: flex; align-items: center; gap: 7px; font: 11.5px var(--cn); color: var(--dim);
+                  background: transparent; border: 0; padding: 2px 0; cursor: pointer; text-align: left; }
+  #layers .chip[aria-pressed="true"] { color: var(--txt); }
+  #layers .chip .box { width: 11px; height: 11px; border: 1px solid var(--line-hot); flex: none; position: relative; }
+  #layers .chip[aria-pressed="true"] .box { border-color: var(--sel); }
+  #layers .chip[aria-pressed="true"] .box::after { content: ''; position: absolute; inset: 2px; background: var(--sel); }
+  #layers .chip .ln { width: 14px; height: 2px; background: var(--satc, currentColor); flex: none; }
+  #viewtools { pointer-events: auto; margin-left: auto; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+  #viewtools .row { display: flex; gap: 6px; }
+  .iconbtn { width: 30px; height: 30px; display: flex; align-items: center; justify-content: center;
+             background: rgba(6,12,19,.72); border: 1px solid var(--line); color: var(--label);
+             font: 14px var(--num); cursor: pointer; }
+  .iconbtn:hover { color: var(--sel); border-color: var(--line-hot); }
+  select.viewsel { background: rgba(6,12,19,.72); border: 1px solid var(--line); padding: 5px 7px; }
+
+  /* 地面观察读数 */
+  #groundReadout { position: fixed; z-index: 5; left: calc(var(--rail) + 12px); bottom: calc(var(--transport) + 12px);
+                   width: 268px; background: rgba(6,12,19,.8); border: 1px solid var(--line); }
+  #groundReadout .hd { border-bottom: 1px solid var(--line); }
+  #groundReadout .kv { padding: 5px 12px; border-top: 0; }
+  #groundReadout .kv:first-of-type { border-top: 1px solid var(--line); }
+
+  /* ── 底部时间轴 ─────────────────────────────────── */
+  #transport { left: 0; right: 0; bottom: 0; height: var(--transport); display: flex; align-items: stretch;
+               border-left: 0; border-right: 0; border-bottom: 0; z-index: 6; }
+  .grp { display: flex; flex-direction: column; justify-content: center; gap: 6px; padding: 10px 12px;
          border-right: 1px solid var(--line); }
   .grp .gl { font: 10.5px var(--cn); letter-spacing: .06em; color: var(--dim); }
   .grp .gr { display: flex; align-items: center; gap: 7px; }
   .btn { padding: 6px 11px; font: 12.5px var(--cn); color: var(--txt); background: rgba(30, 52, 71, .5);
          border: 1px solid var(--line-hot); cursor: pointer; }
-  .btn:hover { background: rgba(43, 74, 100, .68); color: #eaf3fa; }
+  .btn:hover:not(:disabled) { background: rgba(43, 74, 100, .68); color: #eaf3fa; }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
   .btn.on { color: var(--sel); border-color: rgba(127, 227, 214, .55); background: rgba(127, 227, 214, .12); }
-  .btn.icon { width: 34px; padding: 6px 0; text-align: center; font: 13px var(--num); }
+  .btn.icon { width: 32px; padding: 6px 0; text-align: center; font: 13px var(--num); }
   .seg { display: flex; border: 1px solid var(--line-hot); }
   .seg button { padding: 6px 10px; font: 12px var(--num); letter-spacing: .03em; color: var(--label);
                 background: transparent; border: 0; border-left: 1px solid var(--line-hot); cursor: pointer; }
@@ -158,8 +234,8 @@
   .seg button.on { color: var(--sel); background: rgba(127, 227, 214, .12); }
   #grpTime { flex: 1; min-width: 0; }
   .tline { display: flex; align-items: baseline; gap: 14px; }
-  #tplus { font: 300 27px/1 var(--num); letter-spacing: .03em; color: #eef5fb; font-variant-numeric: tabular-nums; }
-  #tplus .pre { font-size: 13px; color: var(--dim); margin-right: 5px; letter-spacing: .1em; }
+  #tplus { font: 300 26px/1 var(--num); letter-spacing: .03em; color: #eef5fb; font-variant-numeric: tabular-nums; }
+  #tplus .pre { font-size: 12px; color: var(--dim); margin-right: 5px; letter-spacing: .1em; }
   .tmeta { font: 12px var(--num); color: var(--label); font-variant-numeric: tabular-nums; }
   .tmeta em { font-style: normal; color: var(--dim); }
   .tl { position: relative; height: 26px; margin-top: 2px; }
@@ -167,10 +243,16 @@
   .tl .bands { position: absolute; left: 0; right: 0; top: 4px; height: 8px; pointer-events: none; }
   .tl .band { position: absolute; top: 0; height: 100%; background: var(--event); opacity: .85; }
   .tl .band.disp { top: 0; background: var(--sel); opacity: .8; }
-  .tl .evs { position: absolute; left: 0; right: 0; top: 0; height: 8px; pointer-events: none; }
-  .tl .ev { position: absolute; top: 1px; width: 6px; height: 6px; margin-left: -3px;
-            background: var(--bad); transform: rotate(45deg); }
-  .legend i.sw.ev { background: var(--bad); width: 7px; height: 7px; transform: rotate(45deg); }
+  .tl .evs { position: absolute; left: 0; right: 0; top: -1px; height: 10px; pointer-events: none; }
+  /* 事件按类别给不同形状：颜色不再独自承担含义 */
+  .tl .ev { position: absolute; top: 2px; width: 7px; height: 7px; margin-left: -3.5px; }
+  .tl .ev.strobe { background: var(--event); }
+  .tl .ev.window { background: var(--sel); border-radius: 50%; }
+  .tl .ev.maneuver { width: 0; height: 0; background: transparent; border-left: 4px solid transparent;
+                     border-right: 4px solid transparent; border-bottom: 7px solid #9db2c6; margin-left: -4px; }
+  .tl .ev.task { background: #c78bd8; transform: rotate(45deg); }
+  .tl .ev.eclipse { background: transparent; border: 1.5px solid #6fa8dc; border-radius: 50%; }
+  .tl .ev.other { background: var(--bad); transform: rotate(45deg); }
   .tl .ticks { position: absolute; left: 0; right: 0; top: 20px; height: 6px; border-left: 1px solid var(--line-hot); }
   .tl .tick { position: absolute; top: 0; width: 1px; height: 4px; background: var(--line-hot); }
   .tl .ticklab { position: absolute; top: 3px; font: 9.5px var(--num); color: var(--dim); transform: translateX(-50%); }
@@ -181,17 +263,25 @@
   #stepSlider::-moz-range-thumb { width: 2px; height: 25px; border: 0; border-radius: 0; background: var(--sel);
                                   box-shadow: 0 0 9px rgba(127, 227, 214, .85); }
   #stepSlider::-webkit-slider-runnable-track, #stepSlider::-moz-range-track { background: transparent; }
-  #grpView { border-right: 0; }
+  .legend .shp { width: 7px; height: 7px; background: currentColor; display: inline-block; }
+  .legend .shp.round { border-radius: 50%; }
+  .legend .shp.tri { width: 0; height: 0; background: transparent; border-left: 4px solid transparent;
+                     border-right: 4px solid transparent; border-bottom: 7px solid currentColor; }
+  .legend .shp.dia { transform: rotate(45deg); }
+  .legend .shp.ring { background: transparent; border: 1.5px solid currentColor; border-radius: 50%; }
+  #grpCurves { border-right: 0; }
 
   /* 面板收起：把屏幕让给三维 */
-  body.tight #rail, body.tight #console { transform: translateX(-130%); }
-  body.tight #console { transform: translateX(130%); }
   #rail, #console { transition: transform .22s ease; }
+  body.rail-off #rail { transform: translateX(-105%); }
+  body.console-off #console { transform: translateX(105%); }
 
-  @media (max-width: 1280px) { :root { --console: 316px; --rail: 200px; } }
-  @media (max-width: 980px) {
-    #rail { display: none; }
-    #topbar .sys small { display: none; }
+  @media (max-width: 1400px) { :root { --console: 330px; --rail: 272px; } }
+  @media (max-width: 1120px) {
+    /* 窄屏不再无限压缩三维：两侧转抽屉，由按钮唤出 */
+    #rail, #console { width: min(88vw, 340px); z-index: 7; }
+    #sceneTools { left: 12px; right: 12px; }
+    #groundReadout { left: 12px; }
   }
   @media (prefers-reduced-motion: no-preference) {
     /* backwards：入场结束后不再占用 transform，否则面板收起的位移会被动画填充覆盖 */
@@ -207,56 +297,136 @@
 <div id="vignette"></div>
 
 <header class="panel" id="topbar">
-  <div class="sys">天幕卫星 V0 · 任务仿真<small>飞行模拟仿真系统 · 编队显示载荷</small></div>
+  <div class="sys"><span class="mark" aria-hidden="true"></span>天幕卫星仿真系统</div>
   <span class="sep"></span>
-  <span id="runTag" class="tag na"><i></i><span id="runTagText">未接入</span></span>
+  <div class="seg" id="viewTabs" role="tablist" aria-label="视图">
+    <button role="tab" data-view="formation" class="on" aria-selected="true">编队总览</button>
+    <button role="tab" data-view="satellite" aria-selected="false">单星查看</button>
+    <button role="tab" data-view="ground" aria-selected="false">地面观察</button>
+  </div>
+  <span class="sep"></span>
+  <span id="runTag" class="tag na"><i></i><span id="runTagText">未加载</span></span>
   <span id="alarmTag" class="tag na" title="参数超出允许范围的项数"><i></i>超限 <b id="alarmCount">0</b> 项</span>
   <span id="dataTag" class="tag na"><i></i><span id="dataTagText">数据源未连接</span></span>
-  <button class="btn primary" id="btnAttach">接入数据</button>
   <span class="grow"></span>
-  <div class="clockmini">数据时间<b id="utcg">--</b></div>
+  <div class="scenename">当前场景<b id="kvScene">三星编队示例（合成数据）</b></div>
   <span class="sep"></span>
-  <button class="ghostbtn" id="btnTogglePanels" aria-expanded="true" aria-controls="rail console"
-          title="收起左右面板，把屏幕让给三维画面（快捷键 H）">收起面板</button>
-  <a class="ghostbtn" href="/web/" target="_blank" rel="noopener" style="display:flex;align-items:center">观测终端</a>
+  <button class="ghostbtn" id="btnAttach">加载示例</button>
+  <button class="ghostbtn" id="btnSave" disabled title="把当前场景参数与显示偏好存为 JSON 文件（浏览器下载，不存服务器）">保存场景</button>
+  <button class="ghostbtn" id="btnExport" disabled title="导出真实存在的数据字段，空值不填 0">导出结果</button>
+  <button class="ghostbtn" id="btnFull" title="全屏（Esc 退出）">全屏</button>
+  <div class="clockhead">仿真时刻<b id="utcg">--</b></div>
+  <span class="sep"></span>
+  <button class="ghostbtn" id="btnRail" aria-pressed="true" title="收起/展开左侧控制区">左栏</button>
+  <button class="ghostbtn" id="btnConsole" aria-pressed="true" title="收起/展开右侧状态区">右栏</button>
+  <a class="ghostbtn" href="/web/" target="_blank" rel="noopener" style="display:flex;align-items:center"
+     title="在新标签页打开 StarTM 观测终端（独立于本工作台）">观测终端</a>
 </header>
 
-<nav class="panel" id="rail" aria-label="目标列表与任务状态">
-  <div class="hd">目标<span class="r" id="tgtCount">3 颗</span></div>
+<nav class="panel" id="rail" aria-label="场景控制与卫星列表">
+  <div class="hd">场景控制<span class="r" id="kvRate">1×</span></div>
+  <div class="sec">
+    <div class="row" style="justify-content:space-between">
+      <span class="kv" style="flex:1;padding:0"><span>仿真时刻</span><b id="kvTplus" style="font:13px var(--num)">T+--:--:--</b></span>
+      <span class="kv" style="flex:1;padding:0;justify-content:flex-end"><span>进度</span><b id="kvPct">--</b></span>
+    </div>
+    <div class="kv"><span>数据时长 / 采样</span><b id="kvSpan">--</b></div>
+    <div class="kv"><span>参数版本</span><b id="kvVer">--</b></div>
+  </div>
+
+  <div class="hd">卫星列表<span class="r" id="tgtCount">3 颗</span></div>
   <div id="tgtList"></div>
+
   <div class="hd">任务状态</div>
-  <div class="sum" id="missionSum"></div>
+  <div class="sum" id="missionSum" style="padding:4px 12px 10px"></div>
+
+  <div class="hd">场景配置</div>
+  <div class="pending">参数修改与重新运行<b style="color:var(--label)">本轮未开放</b>：轨道参数与 STK 的对接尚未完成，
+    先不做改参数重跑，以免对着错的参数源做界面。将开放的分组：
+    <ul><li>轨道与编队（初始根数、仿真时长、采样间隔）</li>
+        <li>姿态（对地 / 对日模式与切换时刻、太阳翼设置）</li>
+        <li>能源（电池容量、初始 SOC、发电参数）</li>
+        <li>设备功耗与发热（逐台功率、发热量、启停时间）</li>
+        <li>热控（初始温度、热参数、主动热控）</li></ul></div>
+
   <div class="note">三维画面为概略显示，几何判据以数据文件为准；事件按真实时刻单点显示，不插值。<br>
-    线框说明：蓝线为该星实际轨迹（取数据里前后各半个轨道周期的逐秒位置连成，随走带一起移动；选中星转青色），暖白细线为晨昏线（由太阳星历方向画出），地球外淡蓝一圈是大气边缘装饰，不表示物理大气。卫星落在夜半球不等于进地影：本数据集 24 h 全程未进本影，是否受遮挡以光照徽标上的本影裕度为准。</div>
+    线框说明：彩线为该星实际轨迹（取数据里前后各半个轨道周期的逐秒位置连成，随走带一起移动），暖白细线为晨昏线（由太阳星历方向画出），地球外淡蓝一圈是大气边缘装饰，不表示物理大气。卫星落在夜半球不等于进地影：本数据集 24 h 全程未进本影，是否受遮挡以光照徽标上的本影裕度为准。</div>
 </nav>
 
-<aside class="panel" id="console" aria-label="选中目标详情与趋势">
-  <div class="hd">选中目标<span class="r" id="kvSat">TM0S1</span></div>
+<aside class="panel" id="console" aria-label="状态与趋势">
+  <div class="tabs" id="detailTabs" role="tablist" aria-label="详情标签">
+    <button role="tab" data-tab="formation" class="on" aria-selected="true">编队总览</button>
+    <button role="tab" data-tab="orbit" aria-selected="false">轨道</button>
+    <button role="tab" data-tab="attitude" aria-selected="false">姿态</button>
+    <button role="tab" data-tab="power" aria-selected="false">能源</button>
+    <button role="tab" data-tab="thermal" aria-selected="false">热控</button>
+  </div>
   <div class="body">
-    <div class="hero" id="hero"></div>
-    <div class="strip" id="badges"></div>
-    <div class="chart" id="chEdge"></div>
-    <div class="chart" id="chDrift"></div>
-    <div class="chart" id="chSun"></div>
-    <details>
-      <summary>表2-1 全参数<span class="r" id="kvLag">--</span></summary>
-      <div class="inner"><table class="ptable"><tbody id="panelBody">
-        <tr><td class="name" colspan="3">接入数据后显示连续状态与任务参数</td></tr>
-      </tbody></table></div>
-    </details>
-    <details>
-      <summary>系统遥测<span class="r">能源 / 热</span></summary>
-      <div class="inner"><table class="ptable"><tbody id="telemetryBody"></tbody></table></div>
-    </details>
+    <div id="tabFormation">
+      <div class="hd">编队状态<span class="r" id="kvFormationTag"></span></div>
+      <div class="hero" id="formationHero"></div>
+      <div class="hd">卫星关键指标对比<span class="r" id="cmpSatNote"></span></div>
+      <div class="cmp" id="cmpBody"></div>
+      <div class="chart" id="chEdge"></div>
+    </div>
+    <div id="tabSat" hidden>
+      <div class="hd">选中目标<span class="r" id="kvSat">TM0S1</span></div>
+      <div class="hero" id="hero"></div>
+      <div class="strip" id="badges"></div>
+      <div id="tabPanes"></div>
+      <div class="chart" id="chDrift"></div>
+      <div class="chart" id="chSun"></div>
+      <details>
+        <summary>表2-1 全参数<span class="r" id="kvLag">--</span></summary>
+        <div class="inner"><table class="ptable"><tbody id="panelBody">
+          <tr><td class="name" colspan="3">加载数据后显示连续状态与任务参数</td></tr>
+        </tbody></table></div>
+      </details>
+      <details>
+        <summary>系统遥测<span class="r">能源 / 热</span></summary>
+        <div class="inner"><table class="ptable"><tbody id="telemetryBody"></tbody></table></div>
+      </details>
+    </div>
+    <div id="tabGround" hidden>
+      <div class="hd">地面观察<span class="r">同一仿真时钟</span></div>
+      <div class="sec">
+        <div class="row" style="gap:6px">
+          <label for="obsLat">纬度</label><input id="obsLat" type="number" step="0.0001" value="31.8206" style="width:78px">
+          <label for="obsLon">经度</label><input id="obsLon" type="number" step="0.0001" value="117.2272" style="width:84px">
+          <button class="btn" id="btnObs">应用</button>
+        </div>
+        <div class="kv" style="padding-top:7px"><span>观察点</span><b id="kvObs">合肥 31.8206°N 117.2272°E</b></div>
+      </div>
+      <div class="hd">天空中的三颗卫星<span class="r">仰角 ≥ 0° 为在地平以上</span></div>
+      <div class="cmp" id="groundBody"></div>
+      <div class="note">方位角、仰角、斜距取自数据文件（站心 ENU），不是靠移动相机凑出来的；地平线以下的卫星在列表里仍可读，天空视图不画。</div>
+    </div>
   </div>
 </aside>
+
+<div id="sceneTools">
+  <div id="layers" role="group" aria-label="显示图层"></div>
+  <div id="viewtools">
+    <select class="viewsel" id="camSel" aria-label="相机模式">
+      <option value="third">自由视角</option>
+      <option value="follow">跟随选中星</option>
+      <option value="center">编队近景</option>
+    </select>
+    <div class="row">
+      <button class="iconbtn" id="btnReset" title="视角复位">⌂</button>
+      <button class="iconbtn" id="btnDaylight" title="把相机挪到站址与日下点之间，使晨昏线落在可见圆盘上">☀</button>
+    </div>
+  </div>
+</div>
 
 <footer class="panel" id="transport">
   <div class="grp" id="grpPlay">
     <span class="gl">播放</span>
     <div class="gr">
-      <button id="btnPlay" class="btn icon" aria-label="播放">▶</button>
-      <button id="btnPause" class="btn icon" aria-label="暂停">⏸</button>
+      <button id="btnStart" class="btn icon" aria-label="回到起点" title="回到起点">⇤</button>
+      <button id="btnBack" class="btn icon" aria-label="单步后退" title="单步后退（←）">◁</button>
+      <button id="btnPlay" class="btn icon" aria-label="播放" title="播放/暂停（空格）">▶</button>
+      <button id="btnFwd" class="btn icon" aria-label="单步前进" title="单步前进（→）">▷</button>
       <div class="seg" id="rate" role="group" aria-label="走带倍速">
         <button data-rate="1" class="on">1×</button>
         <button data-rate="10">10×</button>
@@ -267,8 +437,9 @@
   <div class="grp" id="grpTime">
     <div class="tline">
       <div id="tplus"><span class="pre">T+</span>--:--:--</div>
+      <div class="tmeta"><em>共</em> <span id="kvTotal">--</span></div>
       <div class="tmeta"><em>仿真</em> <span id="kvStep">0 / 0</span> · <em>步长</em> <span id="kvStepSec">--</span></div>
-      <div class="tmeta" style="margin-left:auto"><em>参数版本</em> <span id="kvVer">--</span></div>
+      <div class="tmeta" style="margin-left:auto"><em id="kvState">未加载</em></div>
     </div>
     <div class="tl">
       <div class="bands" id="tlBands"></div>
@@ -279,19 +450,20 @@
     </div>
     <div class="legend" id="bandLegend" style="gap:14px"></div>
   </div>
-  <div class="grp" id="grpView">
-    <span class="gl">视角</span>
+  <div class="grp" id="grpCurves">
+    <span class="gl">显示</span>
     <div class="gr" style="gap:7px">
-      <div class="seg" id="viewSel" role="group" aria-label="三维视角模式">
-      <button data-view="third" class="on">全局轨道</button>
-      <button data-view="follow">目标跟随</button>
-      <button data-view="center">编队近景</button>
+      <div class="seg" id="curveSel" role="group" aria-label="曲线选择">
+        <button data-curve="edge" class="on">星间距离</button>
+        <button data-curve="sun">目标区太阳高度</button>
       </div>
-      <button class="btn" id="btnDaylight" title="把相机挪到站址与日下点之间，使晨昏线落在可见圆盘上">昼侧视角</button>
+    </div>
+    <div class="gr"><span class="gl" style="letter-spacing:0">曲线区在右栏底部，点击曲线可定位时间</span></div>
   </div>
 </footer>
 
 <div id="tip"></div>
-<script type="module" src="./js/main.js?v=30"></script>
+<div id="toast" role="status" aria-live="polite"></div>
+<script type="module" src="./js/main.js?v=32"></script>
 </body>
 </html>

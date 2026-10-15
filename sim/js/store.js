@@ -7,6 +7,8 @@ const state = {
     stepIntervalSec: 0,   // 每行数据的秒数，接入时由桥给出
     totalSteps: 0,
     currentStep: 0,
+    view: 'formation',    // 顶栏三档：formation | satellite | ground
+    sats: [1, 2, 3],      // 加载后由数据里的星数覆盖
 };
 
 export function getState() { return state; }
