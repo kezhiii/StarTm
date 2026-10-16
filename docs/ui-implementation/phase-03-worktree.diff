@@ -1,0 +1,988 @@
+diff --git a/sim/index.html b/sim/index.html
+index c3391b7..1d02cc3 100644
+--- a/sim/index.html
++++ b/sim/index.html
+@@ -30,9 +30,11 @@
+     --num: "Bahnschrift SemiCondensed", "Bahnschrift", Consolas, "Segoe UI", monospace;
+     --cn: "HarmonyOS Sans SC", "Source Han Sans SC", "Microsoft YaHei", sans-serif;
+     --top: 56px;
+-    --rail: 300px;
+-    --console: 360px;
+-    --transport: 116px;
++    --rail: clamp(286px, 18vw, 326px);
++    --console: clamp(350px, 22vw, 410px);
++    --transport: 142px;
++    --gap: 8px;
++    --scene-min: 480px;
+   }
+   * { box-sizing: border-box; margin: 0; }
+   html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
+@@ -40,12 +42,31 @@
+   button, input, select { font-family: inherit; color: inherit; }
+   [hidden] { display: none !important; }
+ 
+-  #stage { position: fixed; inset: 0; width: 100vw; height: 100vh; border: 0; background: #000; }
+-  #vignette { position: fixed; inset: 0; pointer-events: none;
++  /* ── 骨架：顶栏 / 三栏主区 / 底部时间轴 ─────────────
++     面板与场景是分列的三栏，不再把左右栏覆盖在全屏画布上。 */
++  .app { height: 100dvh; display: grid; overflow: hidden;
++         grid-template-rows: var(--top) minmax(0, 1fr) var(--transport); }
++  .main { position: relative; min-height: 0; display: grid; gap: var(--gap);
++          padding: 0 var(--gap) var(--gap);
++          grid-template-columns: var(--rail) minmax(var(--scene-min), 1fr) var(--console); }
++  body.rail-off .app { --rail: 0px; }
++  body.console-off .app { --console: 0px; }
++  /* 收起时让列宽归 0、内容被裁掉。不能用 display:none —— 那会把网格项从自动定位里
++     摘掉，导致 .scene 顶到第 1 条 0px 的轨道上、反而被压成 2px 宽。 */
++  #rail, #console { min-width: 0; overflow: hidden; }
++  body.rail-off #rail, body.console-off #console { border-width: 0; }
++
++  /* 中央场景容器自己定尺寸；iframe 撑满容器，Three.js 按容器更新（见 app-context.js） */
++  .scene { position: relative; min-width: 0; overflow: hidden; background: #000;
++           border: 1px solid var(--line); }
++  #stage { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #000; }
++  #vignette { position: absolute; inset: 0; pointer-events: none;
+               background: radial-gradient(130% 100% at 50% 45%, transparent 58%, rgba(2, 5, 9, .5) 100%); }
+ 
+-  .panel { position: fixed; background: var(--panel); border: 1px solid var(--line);
++  .panel { position: relative; background: var(--panel); border: 1px solid var(--line);
+            box-shadow: 0 10px 34px rgba(0, 0, 0, .55); }
++  /* 控件文字宁可被容器裁掉，也不许折成逐字竖排（窄栏里踩过这个坑） */
++  .seg button, .tabs button, .btn, .ghostbtn, .tag, summary, .hd { white-space: nowrap; }
+   .tag { display: inline-flex; align-items: center; gap: 5px; padding: 1px 7px; font: 11.5px var(--num);
+          border: 1px solid var(--line-hot); color: var(--label); white-space: nowrap; }
+   .tag.ok { color: var(--sel); border-color: rgba(127, 227, 214, .45); }
+@@ -55,9 +76,12 @@
+   .tag i { width: 5px; height: 5px; background: currentColor; }
+ 
+   /* ── 顶栏 ───────────────────────────────────────── */
+-  #topbar { top: 0; left: 0; right: 0; height: var(--top); display: flex; align-items: center; gap: 12px;
+-            padding: 0 14px; border-left: 0; border-right: 0; border-top: 0; z-index: 6; }
+-  #topbar .sys { display: flex; align-items: center; gap: 9px; font: 600 15px/1.1 var(--cn); color: #e6f1fa; }
++  #topbar { display: flex; align-items: center; gap: 12px; padding: 0 14px;
++            border-left: 0; border-right: 0; border-top: 0; overflow: hidden; }
++  #topbar > * { flex: none; }
++  #topbar .grow { flex: 1 1 auto; min-width: 8px; }
++  #topbar .sys { display: flex; align-items: center; gap: 9px; font: 600 15px/1.1 var(--cn); color: #e6f1fa;
++                 white-space: nowrap; }
+   #topbar .sys .mark { width: 22px; height: 22px; border: 1px solid var(--sel); border-radius: 50%;
+                        position: relative; flex: none; }
+   #topbar .sys .mark::after { content: ''; position: absolute; inset: 6px; border-radius: 50%; background: var(--sel); }
+@@ -67,7 +91,8 @@
+   .scenename b { display: block; font: 13px var(--num); color: var(--label); letter-spacing: .02em; }
+   .clockhead { text-align: right; font: 12px var(--num); color: var(--label); letter-spacing: .02em; }
+   .clockhead b { display: block; font-size: 15px; color: var(--txt); }
+-  .ghostbtn { padding: 7px 10px; font: 12px var(--cn); color: var(--label); background: transparent;
++  .ghostbtn { display: inline-flex; align-items: center; padding: 7px 10px; font: 12px var(--cn);
++              color: var(--label); background: transparent;
+               border: 1px solid var(--line); cursor: pointer; white-space: nowrap; }
+   .ghostbtn:hover:not(:disabled) { color: var(--sel); border-color: var(--line-hot); background: rgba(43,74,100,.28); }
+   .ghostbtn:disabled { color: var(--dim); cursor: not-allowed; opacity: .6; }
+@@ -76,8 +101,7 @@
+     outline: 1px solid var(--sel); outline-offset: 1px; }
+ 
+   /* ── 左栏 ───────────────────────────────────────── */
+-  #rail { top: var(--top); left: 0; bottom: var(--transport); width: var(--rail);
+-          border-left: 0; border-bottom: 0; display: flex; flex-direction: column; overflow-y: auto;
++  #rail { min-height: 0; border-left: 0; display: flex; flex-direction: column; overflow-y: auto;
+           scrollbar-width: thin; scrollbar-color: var(--line-hot) transparent; }
+   #rail::-webkit-scrollbar { width: 7px; }
+   #rail::-webkit-scrollbar-thumb { background: var(--line-hot); }
+@@ -107,13 +131,18 @@
+   .kv b { font: 13px var(--num); font-weight: 500; color: var(--label); font-variant-numeric: tabular-nums; }
+   .kv b.ok { color: var(--sel); }
+   .kv b.bad { color: var(--bad); }
+-  .note { padding: 8px 12px; font-size: 11px; color: var(--na); line-height: 1.6; }
+-  .pending { padding: 9px 12px; font-size: 11.5px; color: var(--na); line-height: 1.65; }
+-  .pending ul { margin: 5px 0 0 15px; }
++  /* 场景配置入口：本阶段只占位，禁用态要看得出来，不是点了没反应的假按钮 */
++  .cfg { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 10px 12px; }
++  .cfgc { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 4px;
++          min-height: 64px; padding: 8px 10px; background: rgba(11, 19, 28, .55);
++          border: 1px dashed var(--line-hot); color: var(--dim); cursor: not-allowed; text-align: left; }
++  .cfgc .t { font: 12.5px var(--cn); }
++  .cfgc .s { font: 11px var(--cn); color: var(--na); }
++  .cfgc:focus-visible { outline: 1px solid var(--sel); outline-offset: 1px; }
++  .cfgnote { padding: 0 12px 12px; font-size: 11px; color: var(--na); line-height: 1.6; }
+ 
+   /* ── 右栏 ───────────────────────────────────────── */
+-  #console { top: var(--top); right: 0; bottom: var(--transport); width: var(--console);
+-             border-right: 0; border-bottom: 0; display: flex; flex-direction: column; }
++  #console { min-height: 0; border-right: 0; display: flex; flex-direction: column; }
+   .tabs { display: flex; border-bottom: 1px solid var(--line); background: rgba(7,13,20,.6); flex: none; }
+   .tabs button { flex: 1; padding: 10px 2px; font: 12px var(--cn); color: var(--label);
+                  background: transparent; border: 0; border-bottom: 2px solid transparent; cursor: pointer; }
+@@ -142,6 +171,11 @@
+   .cmp td.bad { color: var(--bad); }
+   .cmp td.ok { color: var(--sel); }
+   .cmp .bar { display: block; height: 2px; margin-top: 3px; background: var(--satc, var(--sel)); opacity: .8; }
++  .cmp tr[data-sat] { cursor: pointer; }
++  .cmp tr[data-sat]:hover td { background: rgba(43, 74, 100, .28); }
++  .cmp tr.sel td { background: rgba(127, 227, 214, .08); }
++  .cmp td .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px;
++                 vertical-align: middle; }
+ 
+   details { border-bottom: 1px solid var(--line); }
+   summary { padding: 9px 12px; font: 600 12px var(--cn); letter-spacing: .04em; color: #a2bad0;
+@@ -168,7 +202,13 @@
+   .chart .ch-hd { display: flex; align-items: baseline; gap: 8px; }
+   .chart .ch-hd h3 { font: 600 12px var(--cn); color: #a9c0d6; letter-spacing: .03em; }
+   .chart .ch-hd .sub { margin-left: auto; font: 11px var(--num); color: var(--dim); }
+-  .chart canvas { display: block; width: 100%; height: 104px; margin-top: 6px; cursor: crosshair; }
++  /* V0.3 §6.1：趋势图高 170–210px。原来 104px 会把三条一小时曲线挤成一团。 */
++  .chart canvas { display: block; width: 100%; height: 178px; margin-top: 6px; cursor: crosshair; }
++  /* 空态块：说清楚是哪一类空、缺在哪，不留一张让人误以为坏了的空图 */
++  .chart .empty { display: flex; flex-direction: column; gap: 5px; margin-top: 8px; padding: 12px;
++                  border: 1px dashed var(--line-hot); background: rgba(11,19,28,.5); }
++  .chart .empty b { font: 12.5px var(--cn); color: var(--na); }
++  .chart .empty span { font: 11.5px var(--cn); color: var(--dim); line-height: 1.6; }
+   .legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 5px; font: 11px var(--num); color: var(--label); }
+   .legend span { display: inline-flex; align-items: center; gap: 4px; }
+   .legend i { width: 9px; height: 2px; background: currentColor; }
+@@ -184,11 +224,10 @@
+            font: 12.5px var(--cn); color: var(--txt); box-shadow: 0 8px 26px rgba(0,0,0,.6); }
+   #toast.bad { color: var(--bad); border-color: rgba(216,96,75,.55); }
+ 
+-  /* ── 三维区浮层：图例开关 + 视角工具 ─────────────── */
+-  #sceneTools { position: fixed; z-index: 5; top: calc(var(--top) + 10px); pointer-events: none;
+-                left: calc(var(--rail) + 12px); right: calc(var(--console) + 12px);
++  /* ── 三维区浮层：图层开关 + 相机工具（浮在场景容器内，不参与世界坐标） */
++  #sceneTools { position: absolute; z-index: 3; top: 10px; left: 12px; right: 12px;
++                pointer-events: none;
+                 display: flex; align-items: flex-start; gap: 10px; }
+-  body.tight #sceneTools { left: 12px; right: 12px; }
+   #layers { pointer-events: auto; display: flex; flex-direction: column; gap: 5px; padding: 8px 10px;
+             background: rgba(6,12,19,.72); border: 1px solid var(--line); }
+   #layers .chip { display: flex; align-items: center; gap: 7px; font: 11.5px var(--cn); color: var(--dim);
+@@ -198,6 +237,21 @@
+   #layers .chip[aria-pressed="true"] .box { border-color: var(--sel); }
+   #layers .chip[aria-pressed="true"] .box::after { content: ''; position: absolute; inset: 2px; background: var(--sel); }
+   #layers .chip .ln { width: 14px; height: 2px; background: var(--satc, currentColor); flex: none; }
++  /* XYZ 方向轴指示器：屏幕空间小窗，不参与世界坐标缩放 */
++  #axes { position: absolute; left: 12px; bottom: 12px; width: 72px; height: 72px; pointer-events: none; z-index: 2; }
++  #axes svg { width: 100%; height: 100%; overflow: visible; }
++  /* 编队局部放大窗：真实 RTN 相对位置，只做显示增强，绝不回写轨道坐标 */
++  #formationInset { position: absolute; right: 12px; bottom: 12px; width: 240px; height: 176px;
++                    display: flex; flex-direction: column; z-index: 2;
++                    background: rgba(6,12,19,.84); border: 1px solid var(--line); }
++  #formationInset .fi-hd { padding: 5px 8px; font: 11.5px var(--cn); color: #a2bad0;
++                           border-bottom: 1px solid var(--line); display: flex; align-items: baseline; }
++  #formationInset .fi-sub { margin-left: auto; color: var(--dim); font-size: 11px; }
++  #formationInset canvas { flex: 1; width: 100%; min-height: 0; display: block; }
++  #formationInset .fi-ft { padding: 4px 8px; font: 11px var(--num); color: var(--label);
++                           border-top: 1px solid var(--line); font-variant-numeric: tabular-nums; }
++  #layers .chip:disabled { cursor: not-allowed; }
++  #layers .chip.off { opacity: .34; }
+   #viewtools { pointer-events: auto; margin-left: auto; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+   #viewtools .row { display: flex; gap: 6px; }
+   .iconbtn { width: 30px; height: 30px; display: flex; align-items: center; justify-content: center;
+@@ -206,16 +260,9 @@
+   .iconbtn:hover { color: var(--sel); border-color: var(--line-hot); }
+   select.viewsel { background: rgba(6,12,19,.72); border: 1px solid var(--line); padding: 5px 7px; }
+ 
+-  /* 地面观察读数 */
+-  #groundReadout { position: fixed; z-index: 5; left: calc(var(--rail) + 12px); bottom: calc(var(--transport) + 12px);
+-                   width: 268px; background: rgba(6,12,19,.8); border: 1px solid var(--line); }
+-  #groundReadout .hd { border-bottom: 1px solid var(--line); }
+-  #groundReadout .kv { padding: 5px 12px; border-top: 0; }
+-  #groundReadout .kv:first-of-type { border-top: 1px solid var(--line); }
+-
+   /* ── 底部时间轴 ─────────────────────────────────── */
+-  #transport { left: 0; right: 0; bottom: 0; height: var(--transport); display: flex; align-items: stretch;
+-               border-left: 0; border-right: 0; border-bottom: 0; z-index: 6; }
++  #transport { display: flex; align-items: stretch;
++               border-left: 0; border-right: 0; border-bottom: 0; }
+   .grp { display: flex; flex-direction: column; justify-content: center; gap: 6px; padding: 10px 12px;
+          border-right: 1px solid var(--line); }
+   .grp .gl { font: 10.5px var(--cn); letter-spacing: .06em; color: var(--dim); }
+@@ -244,8 +291,9 @@
+   .tl .band { position: absolute; top: 0; height: 100%; background: var(--event); opacity: .85; }
+   .tl .band.disp { top: 0; background: var(--sel); opacity: .8; }
+   .tl .evs { position: absolute; left: 0; right: 0; top: -1px; height: 10px; pointer-events: none; }
+-  /* 事件按类别给不同形状：颜色不再独自承担含义 */
+-  .tl .ev { position: absolute; top: 2px; width: 7px; height: 7px; margin-left: -3.5px; }
++  /* 事件标记可点：点一下跳到 t_actual 对应时刻 */
++  .tl .ev { position: absolute; top: 2px; width: 7px; height: 7px; margin-left: -3.5px;
++            pointer-events: auto; cursor: pointer; }
+   .tl .ev.strobe { background: var(--event); }
+   .tl .ev.window { background: var(--sel); border-radius: 50%; }
+   .tl .ev.maneuver { width: 0; height: 0; background: transparent; border-left: 4px solid transparent;
+@@ -271,17 +319,14 @@
+   .legend .shp.ring { background: transparent; border: 1.5px solid currentColor; border-radius: 50%; }
+   #grpCurves { border-right: 0; }
+ 
+-  /* 面板收起：把屏幕让给三维 */
+-  #rail, #console { transition: transform .22s ease; }
+-  body.rail-off #rail { transform: translateX(-105%); }
+-  body.console-off #console { transform: translateX(105%); }
+-
+-  @media (max-width: 1400px) { :root { --console: 330px; --rail: 272px; } }
+-  @media (max-width: 1120px) {
+-    /* 窄屏不再无限压缩三维：两侧转抽屉，由按钮唤出 */
+-    #rail, #console { width: min(88vw, 340px); z-index: 7; }
+-    #sceneTools { left: 12px; right: 12px; }
+-    #groundReadout { left: 12px; }
++  /* 窄屏：顶栏先让掉低频信息，避免按钮被挤成逐字竖排 */
++  @media (max-width: 1600px) { #topbar .scenename { display: none; } }
++  @media (max-width: 1480px) { #topbar a.ghostbtn { display: none; } }
++  /* V0.3 §2.2：≤1280 时右栏转成抽屉覆盖，不把中央场景挤得过窄 */
++  @media (max-width: 1280px) {
++    .main { grid-template-columns: var(--rail) minmax(0, 1fr); }
++    #console { position: absolute; top: 0; bottom: var(--gap); right: var(--gap);
++               width: min(88vw, 410px); z-index: 8; }
+   }
+   @media (prefers-reduced-motion: no-preference) {
+     /* backwards：入场结束后不再占用 transform，否则面板收起的位移会被动画填充覆盖 */
+@@ -293,9 +338,7 @@
+ </style>
+ </head>
+ <body>
+-<iframe id="stage" src="/web/?bare=1" title="编队三维态势"></iframe>
+-<div id="vignette"></div>
+-
++<div class="app">
+ <header class="panel" id="topbar">
+   <div class="sys"><span class="mark" aria-hidden="true"></span>天幕卫星仿真系统</div>
+   <span class="sep"></span>
+@@ -315,23 +358,25 @@
+   <button class="ghostbtn" id="btnSave" disabled title="把当前场景参数与显示偏好存为 JSON 文件（浏览器下载，不存服务器）">保存场景</button>
+   <button class="ghostbtn" id="btnExport" disabled title="导出真实存在的数据字段，空值不填 0">导出结果</button>
+   <button class="ghostbtn" id="btnFull" title="全屏（Esc 退出）">全屏</button>
+-  <div class="clockhead">仿真时刻<b id="utcg">--</b></div>
++  <div class="clockhead">仿真时刻 (UTC)<b id="utcg">--</b></div>
+   <span class="sep"></span>
+   <button class="ghostbtn" id="btnRail" aria-pressed="true" title="收起/展开左侧控制区">左栏</button>
+   <button class="ghostbtn" id="btnConsole" aria-pressed="true" title="收起/展开右侧状态区">右栏</button>
+-  <a class="ghostbtn" href="/web/" target="_blank" rel="noopener" style="display:flex;align-items:center"
++  <a class="ghostbtn" href="/web/" target="_blank" rel="noopener"
+      title="在新标签页打开 StarTM 观测终端（独立于本工作台）">观测终端</a>
+ </header>
+ 
++<div class="main">
+ <nav class="panel" id="rail" aria-label="场景控制与卫星列表">
+-  <div class="hd">场景控制<span class="r" id="kvRate">1×</span></div>
++  <div class="hd">场景与运行状态<span class="r" id="kvRate">1×</span></div>
+   <div class="sec">
+     <div class="row" style="justify-content:space-between">
+       <span class="kv" style="flex:1;padding:0"><span>仿真时刻</span><b id="kvTplus" style="font:13px var(--num)">T+--:--:--</b></span>
+       <span class="kv" style="flex:1;padding:0;justify-content:flex-end"><span>进度</span><b id="kvPct">--</b></span>
+     </div>
+-    <div class="kv"><span>数据时长 / 采样</span><b id="kvSpan">--</b></div>
+-    <div class="kv"><span>参数版本</span><b id="kvVer">--</b></div>
++    <div class="kv"><span>场景标识</span><b id="kvMission">--</b></div>
++    <div class="kv"><span>数据性质</span><b id="kvKind">未加载</b></div>
++    <div class="kv"><span>卫星 / 采样 / 历元</span><b id="kvMeta">--</b></div>
+   </div>
+ 
+   <div class="hd">卫星列表<span class="r" id="tgtCount">3 颗</span></div>
+@@ -340,19 +385,49 @@
+   <div class="hd">任务状态</div>
+   <div class="sum" id="missionSum" style="padding:4px 12px 10px"></div>
+ 
+-  <div class="hd">场景配置</div>
+-  <div class="pending">参数修改与重新运行<b style="color:var(--label)">本轮未开放</b>：轨道参数与 STK 的对接尚未完成，
+-    先不做改参数重跑，以免对着错的参数源做界面。将开放的分组：
+-    <ul><li>轨道与编队（初始根数、仿真时长、采样间隔）</li>
+-        <li>姿态（对地 / 对日模式与切换时刻、太阳翼设置）</li>
+-        <li>能源（电池容量、初始 SOC、发电参数）</li>
+-        <li>设备功耗与发热（逐台功率、发热量、启停时间）</li>
+-        <li>热控（初始温度、热参数、主动热控）</li></ul></div>
+-
+-  <div class="note">三维画面为概略显示，几何判据以数据文件为准；事件按真实时刻单点显示，不插值。<br>
+-    线框说明：彩线为该星实际轨迹（取数据里前后各半个轨道周期的逐秒位置连成，随走带一起移动），暖白细线为晨昏线（由太阳星历方向画出），地球外淡蓝一圈是大气边缘装饰，不表示物理大气。卫星落在夜半球不等于进地影：本数据集 24 h 全程未进本影，是否受遮挡以光照徽标上的本影裕度为准。</div>
++  <div class="hd">场景配置<span class="r">未开放</span></div>
++  <div class="cfg">
++    <button class="cfgc" type="button" disabled aria-disabled="true"
++            title="轨道与编队参数：需接入仿真计算引擎后才能修改并重跑">
++      <span class="t">轨道参数</span><span class="s">待接入计算引擎</span></button>
++    <button class="cfgc" type="button" disabled aria-disabled="true"
++            title="姿态与太阳翼参数：需接入仿真计算引擎后才能修改并重跑">
++      <span class="t">姿态参数</span><span class="s">待接入计算引擎</span></button>
++    <button class="cfgc" type="button" disabled aria-disabled="true"
++            title="能源参数：当前结果未包含能源时序，需接入模型后开放">
++      <span class="t">能源参数</span><span class="s">待接入计算引擎</span></button>
++    <button class="cfgc" type="button" disabled aria-disabled="true"
++            title="热控参数：当前结果未包含温度测点时序，需接入模型后开放">
++      <span class="t">热控参数</span><span class="s">待接入计算引擎</span></button>
++  </div>
++  <div class="cfgnote">当前数据为固定结果回放，改参数重跑需等仿真计算引擎接入后才可用。</div>
+ </nav>
+ 
++    <div class="scene" id="scene">
++      <iframe id="stage" src="/web/?bare=1" title="编队三维态势"></iframe>
++      <div id="vignette"></div>
++      <div id="sceneTools">
++        <div id="layers" role="group" aria-label="显示图层"></div>
++        <div id="viewtools">
++          <select class="viewsel" id="camSel" aria-label="相机模式">
++            <option value="global">地球全景</option>
++            <option value="follow">目标跟随</option>
++            <option value="formation">编队近景</option>
++          </select>
++          <div class="row">
++            <button class="iconbtn" id="btnReset" title="视角复位到地球全景">⌂</button>
++            <button class="iconbtn" id="btnDaylight" title="把相机挪到站址与日下点之间，使晨昏线落在可见圆盘上">☀</button>
++          </div>
++        </div>
++      </div>
++      <div id="axes" aria-hidden="true"><svg viewBox="-1 -1 2 2"></svg></div>
++      <div id="formationInset">
++        <div class="fi-hd">编队局部放大 · 非同尺度<span class="fi-sub">RTN 相对位置</span></div>
++        <canvas></canvas>
++        <div class="fi-ft" id="fiFoot">未加载</div>
++      </div>
++    </div>
++
+ <aside class="panel" id="console" aria-label="状态与趋势">
+   <div class="tabs" id="detailTabs" role="tablist" aria-label="详情标签">
+     <button role="tab" data-tab="formation" class="on" aria-selected="true">编队总览</button>
+@@ -367,6 +442,8 @@
+       <div class="hero" id="formationHero"></div>
+       <div class="hd">卫星关键指标对比<span class="r" id="cmpSatNote"></span></div>
+       <div class="cmp" id="cmpBody"></div>
++      <div class="hd">星间距离<span class="r" id="edgeNote"></span></div>
++      <div class="cmp" id="edgeRows"></div>
+       <div class="chart" id="chEdge"></div>
+     </div>
+     <div id="tabSat" hidden>
+@@ -374,8 +451,10 @@
+       <div class="hero" id="hero"></div>
+       <div class="strip" id="badges"></div>
+       <div id="tabPanes"></div>
+-      <div class="chart" id="chDrift"></div>
+-      <div class="chart" id="chSun"></div>
++      <div class="chart" id="chOrbit" hidden></div>
++      <div class="chart" id="chAttitude" hidden></div>
++      <div class="chart" id="chPower" hidden></div>
++      <div class="chart" id="chThermal" hidden></div>
+       <details>
+         <summary>表2-1 全参数<span class="r" id="kvLag">--</span></summary>
+         <div class="inner"><table class="ptable"><tbody id="panelBody">
+@@ -391,33 +470,21 @@
+       <div class="hd">地面观察<span class="r">同一仿真时钟</span></div>
+       <div class="sec">
+         <div class="row" style="gap:6px">
+-          <label for="obsLat">纬度</label><input id="obsLat" type="number" step="0.0001" value="31.8206" style="width:78px">
+-          <label for="obsLon">经度</label><input id="obsLon" type="number" step="0.0001" value="117.2272" style="width:84px">
+-          <button class="btn" id="btnObs">应用</button>
++          <label for="obsLat">纬度</label><input id="obsLat" type="number" step="0.0001" value="31.8206" style="width:78px" disabled>
++          <label for="obsLon">经度</label><input id="obsLon" type="number" step="0.0001" value="117.2272" style="width:84px" disabled>
++          <button class="btn" id="btnObs" disabled>应用</button>
+         </div>
+-        <div class="kv" style="padding-top:7px"><span>观察点</span><b id="kvObs">合肥 31.8206°N 117.2272°E</b></div>
++        <div class="kv" style="padding-top:7px"><span>观察点</span><b id="kvObs">固定站</b></div>
++        <div class="cfgnote" style="padding:6px 0 0">当前结果使用固定观察站：本数据集的方位角、仰角、斜距是按该站一次性算出的，改经纬度不会重算这些读数，所以输入框禁用。天空视图里的站心换算可以跟着新站址走，但那是另一套数，不拿来冒充表里的值。</div>
+       </div>
+       <div class="hd">天空中的三颗卫星<span class="r">仰角 ≥ 0° 为在地平以上</span></div>
+       <div class="cmp" id="groundBody"></div>
+-      <div class="note">方位角、仰角、斜距取自数据文件（站心 ENU），不是靠移动相机凑出来的；地平线以下的卫星在列表里仍可读，天空视图不画。</div>
++      <div class="chart" id="chSun" hidden></div>
++      <div class="note">方位角、仰角、斜距取自数据文件（站心 ENU），不是靠移动相机凑出来的。三维天空视图把编队张角放大了 5 倍以便分辨三颗星，属<b>局部放大 · 非同尺度</b>；地平线以下的卫星在列表里仍可读，天空视图不画。</div>
+     </div>
+   </div>
+ </aside>
+-
+-<div id="sceneTools">
+-  <div id="layers" role="group" aria-label="显示图层"></div>
+-  <div id="viewtools">
+-    <select class="viewsel" id="camSel" aria-label="相机模式">
+-      <option value="third">自由视角</option>
+-      <option value="follow">跟随选中星</option>
+-      <option value="center">编队近景</option>
+-    </select>
+-    <div class="row">
+-      <button class="iconbtn" id="btnReset" title="视角复位">⌂</button>
+-      <button class="iconbtn" id="btnDaylight" title="把相机挪到站址与日下点之间，使晨昏线落在可见圆盘上">☀</button>
+-    </div>
+-  </div>
+-</div>
++  </div><!-- /.main -->
+ 
+ <footer class="panel" id="transport">
+   <div class="grp" id="grpPlay">
+@@ -451,19 +518,14 @@
+     <div class="legend" id="bandLegend" style="gap:14px"></div>
+   </div>
+   <div class="grp" id="grpCurves">
+-    <span class="gl">显示</span>
+-    <div class="gr" style="gap:7px">
+-      <div class="seg" id="curveSel" role="group" aria-label="曲线选择">
+-        <button data-curve="edge" class="on">星间距离</button>
+-        <button data-curve="sun">目标区太阳高度</button>
+-      </div>
+-    </div>
++    <span class="gl">曲线</span>
+     <div class="gr"><span class="gl" style="letter-spacing:0">曲线区在右栏底部，点击曲线可定位时间</span></div>
+   </div>
+ </footer>
++</div><!-- /.app -->
+ 
+ <div id="tip"></div>
+ <div id="toast" role="status" aria-live="polite"></div>
+-<script type="module" src="./js/main.js?v=32"></script>
++<script type="module" src="./js/main.js?v=33"></script>
+ </body>
+ </html>
+diff --git a/sim/js/main.js b/sim/js/main.js
+index ec2b79f..9960f7f 100644
+--- a/sim/js/main.js
++++ b/sim/js/main.js
+@@ -1,7 +1,8 @@
+-import { getState, patch } from './store.js?v=32';
++import { getState, patch } from './store.js?v=33';
+ import { initPanels, render as renderPanels, selectSat, setSpan, getSelectedSat, markAt,
+-         setView, satColor, scenarioSnapshot, exportRows } from './panels.js?v=32';
+-import { setStepSec, getStepSec, loadCategory, getValue } from './loader.js?v=32';
++         setView, satColor, scenarioSnapshot, exportRows } from './panels.js?v=33';
++import { setStepSec, getStepSec, loadCategory, getValue } from './loader.js?v=33';
++import { initInset, renderInset } from './formation-inset.js?v=33';
+ 
+ const displayCfg = await (await fetch('/sim/config/display.json')).json();
+ 
+@@ -112,6 +113,7 @@ function showStep(idx) {
+         ? (idx / (st.totalSteps - 1) * 100).toFixed(1) + ' %' : '--';
+     pushSceneState(st.simSeconds);
+     renderPanels(st.simSeconds);
++    renderInset(st.simSeconds);
+ }
+ 
+ function seekSeconds(sec) {
+@@ -123,28 +125,34 @@ function seekSeconds(sec) {
+     showStep(idx);
+ }
+ 
+-// 相机模式：跟随把相机吊到选中星外侧，编队近景用 km 尺度的主星视角
+-function applyCam() {
+-    if (!bridge) return;
+-    const mode = $('camSel').value;
+-    const idx = getSelectedSat() - 1;
+-    if (mode === 'center') { bridge.setView('center'); bridge.follow && bridge.follow(null); return; }
+-    bridge.setView('third');
+-    bridge.selectSat && bridge.selectSat(idx);
+-    bridge.follow && bridge.follow(mode === 'follow' ? idx : null, 18);
++// 相机取景与页面视图是两件事（V0.3 §5.4/§12）：页面视图决定看什么信息，
++// 相机模式决定三维怎么取景。两者都只由 store 驱动，控件从 store 回显，不互相脱节。
++const CAM_MODES = {
++    global:    { apply: () => { bridge.setView('third'); bridge.follow && bridge.follow(null); } },
++    follow:    { apply: (idx) => { bridge.setView('third'); bridge.selectSat && bridge.selectSat(idx);
++                                   bridge.follow && bridge.follow(idx, 18); } },
++    formation: { apply: () => { bridge.setView('center'); bridge.follow && bridge.follow(null); } },
++};
++
++function setCameraMode(mode) {
++    if (!CAM_MODES[mode]) return;
++    patch({ cameraMode: mode });
++    if (bridge) CAM_MODES[mode].apply(getSelectedSat() - 1);
++    $('camSel').value = mode;                       // 双向回显：程序改的，控件也要跟着变
++    refreshLayers();
+ }
+ 
+ // 顶栏三档视图：编队总览 / 单星查看 / 地面观察。切换不重置仿真时刻（方案 §4.2）
+-function applyView(view) {
++function setPageView(view) {
+     patch({ view });
+     if (bridge) {
+-        const idx = getSelectedSat() - 1;
+         if (view === 'ground') { bridge.setView('first'); bridge.follow && bridge.follow(null); }
+-        else if (view === 'satellite') {
+-            bridge.setView('third'); bridge.selectSat && bridge.selectSat(idx);
+-            bridge.follow && bridge.follow(idx, 18);
+-        } else { bridge.setView('third'); bridge.follow && bridge.follow(null); }
++        else if (view === 'satellite') setCameraMode('follow');
++        else setCameraMode('global');
+     }
++    const ground = view === 'ground';
++    $('camSel').disabled = ground;
++    $('camSel').title = ground ? '地面观察使用站心天空视角，相机模式暂不适用' : '';
+     setView(view);
+ }
+ 
+@@ -160,6 +168,18 @@ function applyLayer(name, on) {
+     if (on && bridge.setLayer(name, on) === false) toast(`「${LAYERS_NAME[name] || name}」这一层三维画面还没实现`);
+ }
+ 
++// 当前视角下不存在的层要置灰，而不是留一个按下去没反应的无效复选框（V0.3 §5.3）
++function refreshLayers() {
++    if (!bridge || !bridge.layers) return;
++    const sup = bridge.layers();
++    [...$('layers').querySelectorAll('button[data-layer]')].forEach(b => {
++        const k = b.dataset.layer, ok = sup[k] !== false;
++        b.disabled = !ok;
++        b.title = ok ? '' : `当前视角下没有「${LAYERS_NAME[k] || k}」这一层`;
++        b.classList.toggle('off', !ok);
++    });
++}
++
+ let lastTick = performance.now();
+ function tick() {
+     const st = getState();
+@@ -201,6 +221,25 @@ function stepBy(d) {
+ 
+ setInterval(tick, 100);
+ 
++// XYZ 方向轴指示器：屏幕空间小窗。场景轴与 J2000 的关系是 (x,y,z)→(x,z,−y)，
++// 所以标 J2000 轴时要换算回去，不能把场景轴直接当惯性轴。
++const AXES = [['X', [1, 0, 0], '#ff6b6b'], ['Y', [0, 0, -1], '#6bd0ff'], ['Z', [0, 1, 0], '#8ef0a8']];
++function updateAxes() {
++    const svg = document.querySelector('#axes svg');
++    if (!svg || !bridge || !bridge.camBasis) return;
++    const b = bridge.camBasis();
++    if (!b) return;
++    let out = '';
++    for (const [name, v, col] of AXES) {
++        const x = v[0] * b.right[0] + v[1] * b.right[1] + v[2] * b.right[2];
++        const y = -(v[0] * b.up[0] + v[1] * b.up[1] + v[2] * b.up[2]);
++        out += `<line x1="0" y1="0" x2="${x.toFixed(3)}" y2="${y.toFixed(3)}" stroke="${col}" stroke-width="0.06"/>` +
++               `<text x="${(x * 1.3).toFixed(3)}" y="${(y * 1.3 + 0.09).toFixed(3)}" fill="${col}" font-size="0.26">${name}</text>`;
++    }
++    svg.innerHTML = out;
++}
++setInterval(updateAxes, 200);
++
+ // ── 加载示例场景 ───────────────────────────────────
+ $('btnAttach').onclick = async () => {
+     if (!bridge) { setRun('三维画面未就绪', 'bad'); return; }
+@@ -221,8 +260,10 @@ $('btnAttach').onclick = async () => {
+         return;
+     }
+ 
++    let meta = null;
+     try {
+-        const st = (await (await fetch('/sim-data/meta.json')).json()).station;
++        meta = await (await fetch('/sim-data/meta.json')).json();
++        const st = meta.station;
+         if (st) {
+             station = { lat: st.lat_deg, lon: st.lon_deg, name: st.name || '站址' };
+             $('obsLat').value = st.lat_deg; $('obsLon').value = st.lon_deg;
+@@ -242,14 +283,24 @@ $('btnAttach').onclick = async () => {
+     pushSceneState(0);
+     bridge.rebuildView();
+     Object.entries(layers).forEach(([n, on]) => applyLayer(n, on));
++    refreshLayers();
+ 
+     const s = getState();
+     s.totalSteps = bridge.totalSteps();
+     s.stepIntervalSec = bridge.getStepIntervalSec();
+     $('stepSlider').max = Math.max(0, s.totalSteps - 1);
+     $('kvStepSec').textContent = `${s.stepIntervalSec} s`;
+-    $('kvSpan').textContent = `${hms(s.totalSteps * s.stepIntervalSec)} / ${s.stepIntervalSec} s`;
+     $('kvTotal').textContent = hms(s.totalSteps * s.stepIntervalSec);
++    // 只填真实元数据：卫星数与历元数取自 meta.json，采样间隔取自桥读到的帧间隔
++    $('kvMeta').textContent = `${meta?.sats ?? '—'} 颗 / ${s.stepIntervalSec} s / ` +
++                              `${meta?.rows_per_sat ?? s.totalSteps} 历元`;
++    $('kvKind').textContent = '固定结果回放';
++    try {
++        const ti = await loadCategory('time_ident');
++        const miss = getValue(ti, 0, 1, 'mission'), md = getValue(ti, 0, 1, 'mode');
++        $('kvMission').textContent = [miss, md].filter(Boolean).join(' · ') || '未提供';
++        $('kvScene').textContent = miss || '未提供';
++    } catch (e) { $('kvMission').textContent = '未提供'; }
+     patch({ attached: true, simSeconds: 0, currentStep: 0, playing: false });
+     setStepSec(s.stepIntervalSec);
+     try {
+@@ -257,7 +308,7 @@ $('btnAttach').onclick = async () => {
+             simSeconds: () => getState().simSeconds,
+             onSelect: sat => {
+                 bridge && bridge.selectSat && bridge.selectSat(sat - 1);
+-                if ($('camSel').value === 'follow' && bridge) bridge.follow(sat - 1, 18);
++                if (getState().cameraMode === 'follow' && bridge) bridge.follow(sat - 1, 18);
+                 renderPanels(getState().simSeconds);
+             },
+             onSeek: seekSeconds,
+@@ -271,6 +322,8 @@ $('btnAttach').onclick = async () => {
+             orbitAt: (i) => (bridge.orbitAt ? bridge.orbitAt(i) : null),
+         });
+         setSpan(s.totalSteps * s.stepIntervalSec);
++        initInset($('formationInset'), { onSelect: sat => selectSat(sat) });
++        renderInset(0);
+     } catch (e) {
+         setRun('参数台初始化失败', 'bad');
+         toast('参数台初始化失败：' + e.message, true);
+@@ -302,9 +355,9 @@ $('rate').addEventListener('click', (e) => {
+ });
+ $('viewTabs').addEventListener('click', (e) => {
+     const b = e.target.closest('button[data-view]');
+-    if (b) applyView(b.dataset.view);
++    if (b) setPageView(b.dataset.view);
+ });
+-$('camSel').onchange = () => applyCam();
++$('camSel').onchange = () => setCameraMode($('camSel').value);
+ $('stepSlider').oninput = (e) => {
+     const st = getState();
+     if (!st.attached) return;
+@@ -330,8 +383,21 @@ $('stepSlider').addEventListener('mousemove', (e) => {
+ });
+ $('stepSlider').addEventListener('mouseleave', () => { $('tip').style.display = 'none'; });
+ 
++// 点时间轴上的事件标记：跳到 t_actual 对应时刻；事件带具体星号时顺带选中该星，
++// sat_id=ALL 的不动选中目标（不能替用户猜他要看的星）。
++$('tlEvents').addEventListener('click', (e) => {
++    const el = e.target.closest('.ev');
++    if (!el) return;
++    const sec = Number(el.dataset.sec);
++    if (!Number.isFinite(sec)) return;
++    seekSeconds(sec);
++    const sat = Number(el.dataset.sat);
++    if (Number.isFinite(sat) && sat > 0) selectSat(sat);
++    toast(`已跳到事件时刻 T+${hms(sec)}` + (sat ? `，选中 TM0S${sat}` : '（该事件对全部卫星生效，未改选中目标）'));
++});
++
+ $('btnDaylight').onclick = () => { bridge && bridge.frameDaylight && bridge.frameDaylight(); };
+-$('btnReset').onclick = () => { $('camSel').value = 'third'; applyCam(); };
++$('btnReset').onclick = () => setCameraMode('global');
+ $('btnObs').onclick = () => {
+     const lat = Number($('obsLat').value), lon = Number($('obsLon').value);
+     if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+diff --git a/sim/js/panels.js b/sim/js/panels.js
+index a5f8091..23abcdd 100644
+--- a/sim/js/panels.js
++++ b/sim/js/panels.js
+@@ -1,5 +1,5 @@
+-import { loadCategory, getValue, getStepSec, lastSecond } from './loader.js?v=32';
+-import { createChart } from './chart.js?v=32';
++import { loadCategory, getValue, getStepSec, lastSecond, hasField } from './loader.js?v=33';
++import { createChart } from './chart.js?v=33';
+ 
+ const $ = (id) => document.getElementById(id);
+ // 三星身份色：与三维轨迹线、图例、曲线图例同一套，跨视图不变（方案 §8.1）
+@@ -77,28 +77,39 @@ let hooks = {};
+ const key = (file, field) => `${file}.${field}`;
+ const isNotComputed = (file, field) => (cfg.display.notComputed || []).includes(key(file, field));
+ 
+-// ── 取值与四态：未接入 / 尚未计算 / 暂不可用 / 数据异常 ──
++// ── 取值与状态类别（V0.3 §12）─────────────────────────
++// kind 是结构化状态，界面文案与图表/导出层都按它分支，不靠中文文本猜。
++//   notConnected   数据源没接上
++//   notCalculated  列在，但模型没算（notComputed 名单）
++//   missingField   数据源里根本没有这一列 —— 属接口缺口，要回到生成侧补
++//   emptyValue     列在、也该有值，但该历元为空
++//   bad            有值但不是合法数字
++//   num / text     正常值
+ function read(file, field, sat, epoch, scale) {
+-    if (missing.has(file) || !entries[file]) return { kind: 'notConnected', text: '未接入' };
+-    if (isNotComputed(file, field)) return { kind: 'na', text: '尚未计算' };
+-    const raw = getValue(entries[file], epoch, sat, field);
+-    if (raw === null || raw === undefined || raw === '') return { kind: 'na', text: '暂不可用' };
++    const e = entries[file];
++    if (!e || missing.has(file)) return { kind: 'notConnected', text: '未接入' };
++    if (isNotComputed(file, field)) return { kind: 'notCalculated', text: '尚未计算' };
++    if (!hasField(e, field)) return { kind: 'missingField', text: '字段未提供' };
++    const raw = getValue(e, epoch, sat, field);
++    if (raw === null || raw === undefined || raw === '') return { kind: 'emptyValue', text: '暂无数据' };
+     if (/^-?\d+(\.\d+)?$/.test(raw)) {
+         const n = Number(raw) * (scale || 1);
+         return Number.isFinite(n) ? { kind: 'num', n, raw: Number(raw) } : { kind: 'bad', text: '数据异常' };
+     }
+     return { kind: 'text', text: raw };
+ }
++const isVoid = v => v.kind !== 'num' && v.kind !== 'text';
+ 
+ // 由若干列求和（用电功率 = 平台 + 载荷）；任一列缺值即整体不可得，不拿 0 顶
+ function sumOf(file, fields, sat, epoch) {
+-    let acc = 0, got = false;
++    let acc = 0, got = false, worst = null;
+     for (const f of fields) {
+         const v = read(file, f, sat, epoch, 1);
+-        if (v.kind !== 'num') continue;
+-        acc += v.n; got = true;
++        if (v.kind === 'num') { acc += v.n; got = true; }
++        else if (!worst || v.kind === 'missingField') worst = v;
+     }
+-    return got ? { kind: 'num', n: acc } : { kind: 'na', text: '暂不可用' };
++    if (got) return { kind: 'num', n: acc };
++    return worst || { kind: 'emptyValue', text: '暂无数据' };
+ }
+ 
+ function heroValue(h, sat, epoch) {
+@@ -112,9 +123,9 @@ function orbitAt(sat, epoch, field) {
+     const rows = hooks.orbitAt ? hooks.orbitAt(epoch) : null;
+     if (!rows) return { kind: 'notConnected', text: '未接入' };
+     const r = rows[sat - 1];
+-    if (!r) return { kind: 'na', text: '暂不可用' };
++    if (!r) return { kind: 'emptyValue', text: '暂无数据' };
+     const n = field === 'sma' ? r.a - 6378.137 : Math.hypot(r.Vx, r.Vy, r.Vz);
+-    return Number.isFinite(n) ? { kind: 'num', n } : { kind: 'na', text: '暂不可用' };
++    return Number.isFinite(n) ? { kind: 'num', n } : { kind: 'bad', text: '数据异常' };
+ }
+ 
+ function fmt(v) {
+@@ -122,6 +133,14 @@ function fmt(v) {
+     return v.toFixed(dp);
+ }
+ 
++// 图例里如实报出越限比例。越限是数据事实（自由漂移构型），不能靠放宽阈值掩盖。
++const outText = (series) => {
++    const r = series.map(x => x.outRatio).filter(v => typeof v === 'number');
++    if (!r.length) return '';
++    const m = Math.max(...r);
++    return m > 0 ? ` · 实测越限 ${(m * 100).toFixed(1)}% 采样点` : ' · 全程在带内';
++};
++
+ function cell(v) {
+     if (v.kind === 'num') return { text: fmt(v.n), cls: '' };
+     if (v.kind === 'text') return { text: v.text, cls: '' };
+@@ -204,6 +223,7 @@ export function setTab(tab) {
+     $('tabFormation').hidden = tab !== 'formation';
+     $('tabGround').hidden = tab !== 'ground';
+     $('tabSat').hidden = !satPane;
++    syncChartVisibility();
+     render(hooks.simSeconds ? hooks.simSeconds() : 0);
+ }
+ 
+@@ -284,42 +304,47 @@ function renderFormation(epoch, simSeconds) {
+         return v.kind === 'num' && v.raw === 1;
+     }).length;
+     $('formationHero').innerHTML = [
+-        ['三颗卫星', `${online} / ${sats.length} 可见`, online === sats.length ? 'ok' : ''],
+-        ['星间距离（平均）', avg === null ? '暂不可用' : avg.toFixed(1) + ' km', avg === null ? 'na' : ''],
+-        ['构型偏差', worst === null ? '暂不可用' : worst.toFixed(1) + ' m',
++        ['可见卫星', `${online} / ${sats.length}`, online === sats.length ? 'ok' : ''],
++        ['平均星间距', avg === null ? '暂无数据' : avg.toFixed(1) + ' km', avg === null ? 'na' : ''],
++        ['构型偏差', worst === null ? '暂无数据' : worst.toFixed(1) + ' m',
+             worst === null ? 'na' : (worst > d.edgeToleranceM ? 'bad' : 'ok')],
+-        ['当前时刻', 'T+' + hms(simSeconds), ''],
++        ['当前仿真时刻', 'T+' + hms(simSeconds), ''],
+     ].map(([k, v, cls]) => `<div class="cell"><div class="k">${k}</div>` +
+         `<div class="v ${cls || ''}" style="font-size:${String(v).length > 9 ? 16 : 24}px">${v}</div></div>`).join('');
+     $('kvFormationTag').textContent = worst === null ? '' : `允许 ±${d.edgeToleranceM} m`;
+ 
+     const rows = [
+-        ['光照状态', s => lightWord(read('sun_eclipse', 'shadow_state', s, epoch, 1))],
++        ['光照状态', s => { const v = read('sun_eclipse', 'shadow_state', s, epoch, 1);
++            return isVoid(v) ? v : { text: lightWord(v), kind: 'text' }; }],
+         ['电池 SOC', s => { const v = read('power', 'battery_soc_pct', s, epoch, 1);
+-                            return v.kind === 'num' ? v.n.toFixed(0) + ' %' : v.text; }],
++            return isVoid(v) ? v : { text: v.n.toFixed(0) + ' %', kind: 'num' }; }],
+         ['发电功率', s => { const v = read('power', 'gen_power', s, epoch, 1);
+-                            return v.kind === 'num' ? v.n.toFixed(0) + ' W' : v.text; }],
++            return isVoid(v) ? v : { text: v.n.toFixed(0) + ' W', kind: 'num' }; }],
+         ['用电功率', s => { const v = sumOf('power', ['platform_power', 'payload_power'], s, epoch);
+-                            return v.kind === 'num' ? v.n.toFixed(0) + ' W' : v.text; }],
++            return isVoid(v) ? v : { text: v.n.toFixed(0) + ' W', kind: 'num' }; }],
+         ['关键温度', s => { const v = read('thermal', 'temp_main', s, epoch, 1);
+-                            return v.kind === 'num' ? v.n.toFixed(1) + ' ℃' : v.text; }],
++            return isVoid(v) ? v : { text: v.n.toFixed(1) + ' ℃', kind: 'num' }; }],
+     ];
+-    // 星间距离是编队量，列在三颗星的格子里会重复三遍，单独一行放在对比表下方
+-    const edgeLine = EDGE_FIELDS.map(f => {
+-        const v = read('formation_geom', f, 1, epoch, 1000);
+-        return `${EDGE_LABEL[f]} ${v.kind === 'num' ? v.n.toFixed(2) : '—'}`;
+-    }).join(' · ');
+     const head = `<tr><th>指标</th>${sats.map(s =>
+         `<th style="--satc:${colorOf(s)}">TM0S${s}</th>`).join('')}</tr>`;
+     $('cmpBody').innerHTML = `<table>${head}` + rows.map(([name, fn]) => {
+         const cells = sats.map(s => fn(s));
+-        const na = cells.every(c => /未|暂|—/.test(c));
+-        const cls = na ? 'na' : (/不可见|本影|异常/.test(cells.join('')) ? 'bad' : '');
+-        return `<tr><td>${name}</td>${cells.map(c => `<td class="${cls}">${c}</td>`).join('')}</tr>`;
+-    }).join('') +
+-        `<tr><td>星间距离 km</td><td colspan="${sats.length}" style="text-align:left">${edgeLine}</td></tr>` +
+-        `</table>`;
+-    $('cmpSatNote').textContent = '无数据的项显示"未计算"，不以 0 代替';
++        const allVoid = cells.every(c => isVoid(c));
++        // 状态色只看结构化 kind。光照=本影 是正常读数，绝不能再按文本正则涂红。
++        const rowCls = allVoid ? 'na' : (cells.some(c => c.kind === 'bad') ? 'bad' : '');
++        return `<tr><td>${name}</td>${cells.map(c =>
++            `<td class="${rowCls || (isVoid(c) ? 'na' : '')}">${c.text}</td>`).join('')}</tr>`;
++    }).join('') + `</table>`;
++    $('cmpSatNote').textContent = '缺值按类别显示，不以 0 代替';
++
++    // 三组星间距离各占一行（V0.3 §6.1 组件4）；数据本身就是 km，不做无依据换算
++    const EDGE_NAME = { edge_12: 'TM0S1–TM0S2', edge_23: 'TM0S2–TM0S3', edge_31: 'TM0S3–TM0S1' };
++    $('edgeRows').innerHTML = `<table><tr><th>星间连线</th><th>距离 (km)</th></tr>` + EDGE_FIELDS.map(f => {
++        const v = read('formation_geom', f, 1, epoch, 1);
++        return `<tr><td>${EDGE_NAME[f]}</td><td class="${isVoid(v) ? 'na' : ''}">` +
++               `${isVoid(v) ? v.text : v.n.toFixed(3)}</td></tr>`;
++    }).join('') + `</table>`;
++    $('edgeNote').textContent = '来源 formation_geom，单位 km';
+ }
+ 
+ function renderMission(epoch, simSeconds) {
+@@ -377,7 +402,8 @@ function renderGround(epoch) {
+         const el = read('ground_obs', 'el', s, epoch, 1);
+         const rg = read('ground_obs', 'range', s, epoch, 1);
+         const above = el.kind === 'num' ? (el.n >= 0 ? '地平以上' : '地平以下') : el.text;
+-        return `<tr><td>TM0S${s}</td>` +
++        return `<tr data-sat="${s}"${s === selectedSat ? ' class="sel"' : ''}>` +
++            `<td><i class="dot" style="background:${colorOf(s)}"></i>TM0S${s}</td>` +
+             `<td class="${az.kind === 'num' ? '' : 'na'}">${az.kind === 'num' ? az.n.toFixed(1) + '°' : az.text}</td>` +
+             `<td class="${el.kind === 'num' ? (el.n >= 0 ? 'ok' : '') : 'na'}">${el.kind === 'num' ? el.n.toFixed(1) + '°' : el.text}</td>` +
+             `<td class="${rg.kind === 'num' ? '' : 'na'}">${rg.kind === 'num' ? rg.n.toFixed(0) + ' km' : rg.text}</td>` +
+@@ -386,23 +412,41 @@ function renderGround(epoch) {
+     host.innerHTML = `<table><tr><th>目标</th><th>方位角</th><th>仰角</th><th>斜距</th><th>状态</th></tr>${rows}</table>`;
+ }
+ 
+-// ── 趋势图 ──────────────────────────────────────────
++// ── 趋势图：每个标签有自己的图表容器，切标签只换内容不动相机/时间/选星 ──
++function mountChart(host, spec) {
++    host.innerHTML = `<div class="ch-hd"><h3>${spec.title}（${spec.unit}）</h3><span class="sub"></span></div>` +
++        `<canvas></canvas><div class="legend"></div>`;
++    const cv = host.querySelector('canvas');
++    cv.setAttribute('role', 'img');
++    cv.setAttribute('aria-label', `${spec.title} 趋势图`);
++    cv.addEventListener('charthover', e => showTip(e.detail, spec));
++    cv.addEventListener('chartleave', hideTip);
++    host._empty = false;
++    host.chart = createChart(cv, { onPick: sec => hooks.onSeek && hooks.onSeek(sec) });
++}
++
++// 空态要说清是哪一类空、缺在哪，不画伪曲线，也不留一张空图让人以为坏了
++function renderEmpty(host, spec) {
++    if (host._empty) return;
++    host._empty = true; host.chart = null;
++    host.innerHTML = `<div class="ch-hd"><h3>${spec.title}（${spec.unit}）</h3></div>` +
++        `<div class="empty"><b>本场景没有可画的${spec.title}曲线</b>` +
++        `<span>${spec.emptyReason || '所选时间窗内该字段没有有效值。'}</span></div>`;
++}
++
+ function buildCharts() {
+     for (const spec of cfg.charts) {
+         const host = $(spec.id);
+         if (!host) continue;
+-        if ((cfg.display.notComputed || []).some(k => spec.series.some(s => k === `${spec.file}.${s.field}`))) {
+-            host.hidden = true;      // 全为未计算量的图不画，避免把恒 0 线当成完美保持
+-            continue;
+-        }
+-        host.innerHTML = `<div class="ch-hd"><h3>${spec.title}</h3><span class="sub"></span></div>` +
+-            `<canvas></canvas><div class="legend"></div>`;
+-        const cv = host.querySelector('canvas');
+-        cv.setAttribute('role', 'img');
+-        cv.setAttribute('aria-label', `${spec.title} 趋势图`);
+-        cv.addEventListener('charthover', e => showTip(e.detail, spec));
+-        cv.addEventListener('chartleave', hideTip);
+-        charts[spec.id] = { spec, host, cv, chart: createChart(cv, { onPick: sec => hooks.onSeek && hooks.onSeek(sec) }) };
++        charts[spec.id] = { spec, host };
++    }
++    syncChartVisibility();
++}
++
++function syncChartVisibility() {
++    for (const { spec, host } of Object.values(charts)) {
++        host.hidden = spec.tab !== activeTab;
++        if (!host.hidden && !host.chart && !host._empty) mountChart(host, spec);
+     }
+ }
+ 
+@@ -410,13 +454,14 @@ function seriesFor(spec, epLo, epHi) {
+     const e = entries[spec.file];
+     if (!e) return [];
+     const stepSec = getStepSec();
+-    const stride = Math.max(1, Math.ceil((epHi - epLo) / 600));   // 1 秒数据抽到 ≤600 点，画得快也不糊
+-    // 三条边长按"组"上色而不是按星：一条边对应两颗星，用星色会误导
++    const stride = Math.max(1, Math.ceil((epHi - epLo) / 600));   // 只降采样画法，不动底层数据与导出
++    const sat = spec.perSat ? selectedSat : 1;
+     return spec.series.map((s, i) => {
+         const data = [];
+         for (let ep = epLo; ep <= epHi; ep += stride) {
+-            const v = read(spec.file, s.field, spec.perSat ? selectedSat : 1, ep, spec.scale);
+-            if (v.kind === 'num') data.push({ x: ep * stepSec, y: v.n });
++            const v = s.sum ? sumOf(spec.file, s.sum, sat, ep)
++                            : read(spec.file, s.field, sat, ep, spec.scale);
++            if (v.kind === 'num') data.push({ x: ep * stepSec, y: v.n + (spec.shift || 0) });
+         }
+         return { name: s.name, color: s.color || SERIES_COLORS[i % SERIES_COLORS.length], data };
+     });
+@@ -427,8 +472,11 @@ function renderCharts(simSeconds) {
+     const nEpoch = Math.max(...Object.values(entries).map(e => e.nEpoch || 1));
+     const epHi = Math.min(nEpoch - 1, Math.floor((simSeconds + 600) / stepSec));
+     const epLo = Math.max(0, Math.floor((simSeconds - 3600) / stepSec));
+-    for (const { spec, chart, host } of Object.values(charts)) {
++    for (const { spec, host } of Object.values(charts)) {
+         if (host.hidden) continue;
++        const series = seriesFor(spec, epLo, epHi);
++        if (!series.some(s => s.data.length)) { renderEmpty(host, spec); continue; }
++        if (!host.chart) mountChart(host, spec);
+         const d = cfg.display;
+         const opts = { cursor: simSeconds };
+         if (spec.bandFromNominal) {
+@@ -441,18 +489,20 @@ function renderCharts(simSeconds) {
+         } else if (spec.band) opts.band = { lo: spec.band[0], hi: spec.band[1] };
+         if (spec.plan != null) opts.plan = { y: spec.plan };
+         if (spec.gate && d.sunAltGate.enabled) opts.plan = { y: d.sunAltGate.thresholdDeg };
+-        chart.setData(seriesFor(spec, epLo, epHi), opts);
++        host.chart.setData(series, opts);
++        const ep = Math.floor(simSeconds / stepSec);
+         host.querySelector('.legend').innerHTML = spec.series.map((s, i) => {
+-            const v = read(spec.file, s.field, spec.perSat ? selectedSat : 1,
+-                Math.floor(simSeconds / stepSec), spec.scale);
++            const v = s.sum ? sumOf(spec.file, s.sum, spec.perSat ? selectedSat : 1, ep)
++                            : read(spec.file, s.field, spec.perSat ? selectedSat : 1, ep, spec.scale);
+             return `<span style="color:${s.color || SERIES_COLORS[i % SERIES_COLORS.length]}"><i></i>${s.name} ` +
+-                   `<b>${v.kind === 'num' ? fmt(v.n) : '—'}</b></span>`;
++                   `<b>${v.kind === 'num' ? fmt(v.n + (spec.shift || 0)) : '—'}</b></span>`;
+         }).join('') + [
+             opts.plan ? `<span style="color:var(--plan)"><i class="dash"></i>${spec.planLabel || '标称'} ${fmt(opts.plan.y)}</span>` : '',
+-            opts.band ? `<span style="color:var(--bad)"><i></i>${spec.bandLabel || `允许 ±${d.edgeToleranceM} m`}</span>` : '',
+-            spec.gate && !cfg.display.sunAltGate.enabled ? '<span style="color:var(--dim)">天黑门限（当前关闭）</span>' : '',
++            opts.band ? `<span style="color:var(--bad)"><i></i>${spec.bandLabel || `允许 ±${d.edgeToleranceM} m`}${outText(series)}</span>` : '',
++            spec.gate && !d.sunAltGate.enabled ? '<span style="color:var(--dim)">天黑门限（当前关闭）</span>' : '',
+         ].join('');
+         host.querySelector('.sub').textContent = '前 1 小时 · 点击定位';
++        if (spec.note) host.querySelector('.sub').title = spec.note;
+     }
+ }
+ 
+@@ -480,7 +530,8 @@ function runsOf(file, field, cls) {
+     return out;
+ }
+ 
+-// 事件表按真实时刻单点显示（不插值），换算成相对秒后标在时间轴上
++// 事件表按真实时刻单点显示（不插值），换算成相对秒后标在时间轴上。
++// 带上 sat_id：只有具体某一颗星的事件才允许顺带选中，ALL 不能随便选星。
+ function eventMarks() {
+     const e = entries.events;
+     if (!e || !t0ms) return [];
+@@ -490,9 +541,12 @@ function eventMarks() {
+         .map(r => {
+             const sec = (Date.parse((r.t_actual || '').replace(' ', 'T') + 'Z') - t0ms) / 1000;
+             if (!Number.isFinite(sec) || sec < 0 || sec > spanSec) return null;
++            const m = /^TM0S(\d+)$/.exec(r.sat_id || '');
+             return { from: sec, to: sec + (Number(r.duration_s) || 0), cls: EVENT_CLASS(r.category),
++                     sat: m ? Number(m[1]) : null, label: r.category,
+                      tip: `事件「${r.category}」${r.sat_id} T+${hms(sec)}` +
+-                          `${r.duration_s ? ` 起 ${Math.round(r.duration_s)} s` : ''}${r.reason ? `（${r.reason}）` : ''}` };
++                          `${r.duration_s ? ` 起 ${Math.round(r.duration_s)} s` : ''}${r.reason ? `（${r.reason}）` : ''}` +
++                          ` · 点击跳转到该时刻` };
+         }).filter(Boolean);
+ }
+ 
+@@ -512,7 +566,8 @@ function paintWindows() {
+              ...eventMarks()];
+     const ev = $('tlEvents');
+     if (ev) ev.innerHTML = eventMarks().map(m =>
+-        `<div class="ev ${m.cls}" style="left:${m.from / spanSec * 100}%" title="${m.tip}"></div>`).join('');
++        `<div class="ev ${m.cls}" style="left:${m.from / spanSec * 100}%" data-sec="${m.from.toFixed(0)}"` +
++        `${m.sat ? ` data-sat="${m.sat}"` : ''} title="${m.tip}"></div>`).join('');
+     const legend = $('bandLegend');
+     if (legend) {
+         const kinds = [...new Set(runs.map(r => r.cls))];
+@@ -613,13 +668,14 @@ export function render(simSeconds) {
+             el.className = cls || '';
+         };
+         const vis = read('ground_obs', 'visible', sat, epoch, 1);
+-        put('st', vis.kind === 'num' ? (vis.raw === 1 ? '可见' : '不可见') : vis.text,
++        // visible 的真实语义是「仰角达标」，属于站心地平概念，就别写成含混的「可见」
++        put('st', vis.kind === 'num' ? (vis.raw === 1 ? '地平以上' : '地平以下') : vis.text,
+             vis.kind === 'num' ? (vis.raw === 1 ? 'st' : 'st na') : 'st na');
+         put('light', lightWord(read('sun_eclipse', 'shadow_state', sat, epoch, 1)));
+         const soc = read('power', 'battery_soc_pct', sat, epoch, 1);
+-        put('soc', soc.kind === 'num' ? soc.n.toFixed(0) + '%' : '未计算');
++        put('soc', soc.kind === 'num' ? soc.n.toFixed(0) + '%' : soc.text);
+         const tp = read('thermal', 'temp_main', sat, epoch, 1);
+-        put('temp', tp.kind === 'num' ? tp.n.toFixed(1) + '℃' : '未计算');
++        put('temp', tp.kind === 'num' ? tp.n.toFixed(1) + '℃' : tp.text);
+         const el = read('ground_obs', 'el', sat, epoch, 1);
+         const rg = read('ground_obs', 'range', sat, epoch, 1);
+         put('el', el.kind === 'num' ? el.n.toFixed(1) : '—');
+@@ -655,6 +711,11 @@ export async function initPanels(displayJson, h) {
+         const b = e.target.closest('button[data-tab]');
+         if (b) setTab(b.dataset.tab);
+     });
++    // 点地面观察表里的某一行 = 选中那颗星，天空视图与右栏一起跟着走
++    $('groundBody').addEventListener('click', (e) => {
++        const tr = e.target.closest('tr[data-sat]');
++        if (tr) selectSat(Number(tr.dataset.sat));
++    });
+     cfg.station = hooks.station ? hooks.station() : null;
+     buildTargets();
+     buildCharts();

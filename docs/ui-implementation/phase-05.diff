@@ -1,0 +1,1516 @@
+# 快照：phase-05.diff
+# 生成：git diff -- sim/index.html sim/js/panels.js sim/js/chart.js StarTM/web/modules/config.js StarTM/web/modules/views/third-person.js
+# 说明：工作树未逐阶段提交（指令不要求自动 commit），本文件是「当前工作树 vs HEAD」按文件范围截取的 diff。
+diff --git a/StarTM/web/modules/config.js b/StarTM/web/modules/config.js
+index ddce6a4..1ee34e7 100644
+--- a/StarTM/web/modules/config.js
++++ b/StarTM/web/modules/config.js
+@@ -7,9 +7,16 @@ export const RE_3D = 50;
+ export const SAT_SCALE = RE_3D / RE_KM;
+ export const SAT_SCALE_CENTER = 1;
+ 
+-// 相机位置常量（第三视角以地球为主视觉，机位拉近到 1.55 倍地心距）
+-export const THIRD_PERSON_CAMERA_POS = new THREE.Vector3(RE_3D * 1.55, RE_3D * 0.55, RE_3D * 1.55);
++// 相机位置常量（第三视角以地球为主视觉）。
++// 机位长度按「地球直径占画布高 38%–52%」反解：透视 75° 竖直视场下，
++// 地球 silhouette 半角 θ=asin(RE_3D/d)，投影半径 = tan(θ)·(H/2)/tan(37.5°)。
++// d=113.0（旧值 2.26·RE_3D）→ 直径占高 64.4%；d=153.2（3.064·RE_3D）→ 45.2%，落在区间中段。
++export const THIRD_PERSON_CAMERA_POS = new THREE.Vector3(RE_3D * 2.10, RE_3D * 0.75, RE_3D * 2.10);
+ export const THIRD_PERSON_CAMERA_TARGET = new THREE.Vector3(0, 0, 0);
++// 三星身份色：必须与外层工作台 sim/js/panels.js 的 SAT_COLORS 完全一致，
++// 否则三维轨迹线、左栏列表、图例、曲线会各说各话。
++export const SAT_COLORS_HEX = [0x38a9ff, 0x29d7d0, 0xffb83f];
++export const SAT_COLORS_CSS = SAT_COLORS_HEX.map(v => '#' + v.toString(16).padStart(6, '0'));
+ export const FIRST_PERSON_CAMERA_POS = new THREE.Vector3(0, 0, 0);
+ export const FIRST_PERSON_CAMERA_TARGET = new THREE.Vector3(0, 0, 100);
+ 
+diff --git a/StarTM/web/modules/views/third-person.js b/StarTM/web/modules/views/third-person.js
+index 6030378..aaae48a 100644
+--- a/StarTM/web/modules/views/third-person.js
++++ b/StarTM/web/modules/views/third-person.js
+@@ -1,6 +1,6 @@
+ // ======================== 第三视角模块 ========================
+ import * as THREE from 'three';
+-import { DEG, RE_3D, SAT_SCALE, sharedResources } from '../config.js';
++import { DEG, RE_3D, SAT_SCALE, SAT_COLORS_HEX, sharedResources } from '../config.js';
+ import { formatTimestamp, parseTimestamp, dateToJD, calcGMST } from '../math-utils.js';
+ import { initMoon } from '../moon-orbit.js';
+ import { buildSatelliteMesh, buildSatLabel, buildTextSprite, buildSelectionRing, applyScreenScale, placeSelectionRing } from '../sat-model.js';
+@@ -18,11 +18,59 @@ let thirdCam = null;   // 本视角的相机，用于把卫星缩放到恒定屏
+  * 卫星按相机距离缩放到恒定屏幅，并把选中框摆到当前选中的目标上。
+  * 三条更新路径（CSV / WS / 插值）与外部驱动循环都调用它。
+  */
++/**
++ * 三星在全球尺度下投影重合（1 km 编队 ÷ 127.56 km/单位 ≈ 0.008 单位），
++ * 所以标签不能挂在模型本地：那会随姿态转、而且三张叠成一张。
++ * 这里把标签放到场景层，按相机基向量做屏幕空间扇形偏移，并画一条引线指回本体。
++ * 只改显示位置，绝不改模型的世界坐标。
++ */
++const _lblRight = new THREE.Vector3(), _lblUp = new THREE.Vector3(), _lblPos = new THREE.Vector3();
++
++export function updateSatelliteLabels(sceneObjects, camera) {
++    const cam = camera || thirdCam;
++    const labels = sceneObjects.satLabels3D;
++    const meshes = sceneObjects.satelliteMeshes3D;
++    if (!cam || !labels || !labels.length || !meshes) return;
++    const H = cam.userData.viewH || 800;
++    cam.matrixWorld.extractBasis(_lblRight, _lblUp, _lblPos);      // 相机右向与上向
++    const worldPerPx = (dist) => 2 * dist * Math.tan(cam.fov * DEG / 2) / H;
++
++    meshes.forEach((m, i) => {
++        const lb = labels[i], ln = (sceneObjects.satLeaders || [])[i];
++        const on = !!m && m.visible && labelsOn;
++        if (lb) lb.visible = on;
++        if (ln) ln.visible = on;
++        if (!on) return;
++        const dist = cam.position.distanceTo(m.position);
++        const px = worldPerPx(dist);
++        const ang = (90 - i * 120) * DEG;                          // 三张标签均分 120°，互不覆盖
++        // 偏移半径必须大于标签自身宽度：标签约 46 px 宽，120° 均分时
++        // 相邻两张的弦长 = r*sqrt(3)，取 62 px 才有约 107 px 间距，不会叠在一起。
++        const off = 62 * px;
++        _lblPos.copy(m.position)
++            .addScaledVector(_lblRight, Math.cos(ang) * off)
++            .addScaledVector(_lblUp, Math.sin(ang) * off);
++        lb.position.copy(_lblPos);
++        const h = 16 * px;                                         // 目标字高约 16 屏幕像素，远近不变
++        lb.scale.set(h * (lb.userData.aspect || 8), h, 1);
++        if (ln) {
++            const a = ln.geometry.attributes.position;
++            a.setXYZ(0, m.position.x, m.position.y, m.position.z);
++            a.setXYZ(1, _lblPos.x, _lblPos.y, _lblPos.z);
++            a.needsUpdate = true;
++        }
++    });
++}
++
++let labelsOn = true;
++export function setLabelsVisible(on) { labelsOn = !!on; }
++
+ export function updateThirdPersonDecor(sceneObjects, camera) {
+     const cam = camera || thirdCam;
+     const meshes = sceneObjects.satelliteMeshes3D;
+     if (!cam || !meshes || !meshes.length) return;
+     applyScreenScale(meshes, cam);
++    updateSatelliteLabels(sceneObjects, cam);
+     const idx = sceneObjects.selectedSatIdx;
+     placeSelectionRing(sceneObjects.selectionRing, idx == null ? null : meshes[idx], cam);
+ 
+@@ -31,9 +79,10 @@ export function updateThirdPersonDecor(sceneObjects, camera) {
+     if (term && sun) {
+         term.quaternion.setFromUnitVectors(Z_AXIS, sun.position.clone().normalize());
+     }
++    // 三条轨迹线各用自己的身份色；选中只提高不透明度，不换成同一种蓝
+     (sceneObjects.orbitRings || []).forEach((ring, k) => {
+-        ring.material.color.setHex(k === idx ? 0x7fe3d6 : 0x4488ff);
+-        ring.material.opacity = idx == null || k === idx ? 0.75 : 0.4;
++        ring.material.color.setHex(SAT_COLORS_HEX[k % SAT_COLORS_HEX.length]);
++        ring.material.opacity = idx == null ? 0.62 : (k === idx ? 0.95 : 0.3);
+     });
+ }
+ 
+@@ -204,15 +253,39 @@ export function initThirdPersonScene(scene, controls, appState) {
+         ? csv.satelliteData[0].sats : null;
+     const satCount = csvSats ? csvSats.length : (appState.config?.satCount || 0);
+     sceneObjects.satelliteMeshes3D = [];
++    sceneObjects.satLabels3D = [];
++    sceneObjects.satLeaders = [];
+     for (let i = 0; i < satCount; i++) {
+-        // 克隆材质使每颗星的着色独立；大小由 updateThirdPersonDecor 按相机距离逐帧给
+-        const mesh = buildSatelliteMesh(SAT_MAT_3RD.clone());
++        const col = SAT_COLORS_HEX[i % SAT_COLORS_HEX.length];
++        // 每颗星一份克隆材质（一共三份，仍是复用）：本体身份色与列表/图例/曲线同一套（V0.3 §11.2）
++        const bodyMat = SAT_MAT_3RD.clone();
++        bodyMat.color.setHex(col);
++        const mesh = buildSatelliteMesh(bodyMat);
+         mesh.userData.satIdx = i;
+-        // 编队间距 1 km，在此比例下三星重合为一点，只给一个组标签
+-        if (csvSats && i === 0) mesh.add(buildSatLabel('编队 TM0S1-3', { scale: 4, offset: 3.4 }));
+         mesh.visible = false;
+         scene.add(mesh);
+         sceneObjects.satelliteMeshes3D.push(mesh);
++
++        // 每颗星一张独立标签 + 一条引线。全球尺度下三点重合，
++        // 靠屏幕空间扇形偏移把它们标明，不改任何真实坐标。
++        const lb = buildTextSprite(`TM0S${i + 1}`, {
++            scale: 4, color: '#' + col.toString(16).padStart(6, '0'),
++        });
++        lb.visible = false;
++        // 标签也要可点：V0.3 §5.2 要求「点击卫星/标签均选中同一 ID」。
++        // 标签已移出模型层级，拾取层必须自己带上星号索引。
++        lb.userData.satIdx = i;
++        // 扇形偏移可能把标签推到地球背后；标签是标识层，必须永远画在最前
++        lb.material.depthTest = false; lb.renderOrder = 12;
++        scene.add(lb);
++        sceneObjects.satLabels3D.push(lb);
++        const ln = new THREE.Line(
++            new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
++            new THREE.LineBasicMaterial({ color: col, transparent: true, opacity: 0.5 }));
++        ln.visible = false;
++        ln.material.depthTest = false; ln.renderOrder = 11;
++        scene.add(ln);
++        sceneObjects.satLeaders.push(ln);
+     }
+ 
+     // 轨道环
+diff --git a/sim/index.html b/sim/index.html
+index c3391b7..c4e018d 100644
+--- a/sim/index.html
++++ b/sim/index.html
+@@ -8,31 +8,56 @@
+   /* ── 令牌：一种颜色只回答一件事 ─────────────────── */
+   :root {
+     color-scheme: dark;
+-    /* 状态与语义 */
+-    --sel:    #7fe3d6;   /* 当前选中、主要交互 */
+-    --plan:   #8a9aab;   /* 规划值、标称 */
+-    --event:  #e8a33d;   /* 可见窗口与事件 */
+-    --bad:    #d8604b;   /* 超限、失败 */
+-    --na:     #8ba0b3;   /* 未接入 / 未计算 / 暂不可用：要比正文更像"没有数据" */
+-    /* 三星身份色：跨三维线、列表、图例、曲线一致。状态一律带文字，不靠颜色单独表达 */
+-    --sat1:   #7fe3d6;
+-    --sat2:   #6fa8dc;
+-    --sat3:   #e8a33d;
++    /* V0.3 §11.1 颜色 token：下面这套是唯一的取色来源，组件不许各自挑色 */
++    --bg-app: #050d16;
++    --bg-panel: #081522;
++    --bg-panel-raised: #0b1b2a;
++    --bg-hover: #10283a;
++    --border: #17364b;
++    --border-active: #28cfc8;
++    --text-primary: #d7e6f2;
++    --text-secondary: #8ba2b5;
++    --text-muted: #60788c;
++    --accent-teal: #29d7d0;
++    --accent-blue: #38a9ff;
++    --accent-amber: #ffb83f;
++    --status-ok: #35d5b4;
++    --status-warn: #ffb83f;
++    --status-error: #ff6c5e;
++    /* 语义别名（§11.2）：青色=选中/主交互，琥珀=事件与需注意，橙红=只给真实超限与错误，
++       灰蓝=次要说明与无数据。状态一律同时给文字，颜色不单独承担含义。 */
++    --sel:    var(--border-active);
++    --plan:   var(--text-secondary);   /* 规划值、标称 */
++    --event:  var(--status-warn);      /* 可见窗口与事件 */
++    --bad:    var(--status-error);     /* 超限、失败 */
++    --ok:     var(--status-ok);
++    --na:     var(--text-secondary);   /* 未接入 / 未计算 / 暂不可用 */
++    /* 三星身份色：蓝 S1 / 青绿 S2 / 琥珀 S3，三维模型、标签、列表、图例、曲线同一套 */
++    --sat1:   var(--accent-blue);
++    --sat2:   var(--accent-teal);
++    --sat3:   var(--accent-amber);
+     /* 面与线 */
+-    --txt:    #d5e2ee;
+-    --label:  #9db2c6;
+-    --dim:    #6a8095;
+-    --bg:     #04080d;
+-    --panel:  rgba(9, 16, 24, .93);
+-    --raise:  rgba(14, 24, 34, .96);
+-    --line:   #16232f;
+-    --line-hot: #2e4a5f;
++    --txt:    var(--text-primary);
++    --label:  var(--text-secondary);
++    --dim:    var(--text-muted);
++    --bg:     var(--bg-app);
++    --panel:  var(--bg-panel);
++    --raise:  var(--bg-panel-raised);
++    --hover:  var(--bg-hover);
++    --line:   var(--border);
++    --line-hot: #2b5573;               /* 悬停/聚焦描边：比 token 边框亮，但不用强发光 */
++    /* V0.3 §11.4：一套圆角，不要每类控件各挑一个 */
++    --r1: 6px;      /* 标签、输入、小按钮 */
++    --r2: 8px;      /* 按钮、卡片、小窗 */
++    --r3: 10px;     /* 面板、对话框 */
+     --num: "Bahnschrift SemiCondensed", "Bahnschrift", Consolas, "Segoe UI", monospace;
+     --cn: "HarmonyOS Sans SC", "Source Han Sans SC", "Microsoft YaHei", sans-serif;
+     --top: 56px;
+-    --rail: 300px;
+-    --console: 360px;
+-    --transport: 116px;
++    --rail: clamp(286px, 18vw, 326px);
++    --console: clamp(350px, 22vw, 410px);
++    --transport: 142px;
++    --gap: 8px;
++    --scene-min: 480px;
+   }
+   * { box-sizing: border-box; margin: 0; }
+   html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
+@@ -40,24 +65,47 @@
+   button, input, select { font-family: inherit; color: inherit; }
+   [hidden] { display: none !important; }
+ 
+-  #stage { position: fixed; inset: 0; width: 100vw; height: 100vh; border: 0; background: #000; }
+-  #vignette { position: fixed; inset: 0; pointer-events: none;
++  /* ── 骨架：顶栏 / 三栏主区 / 底部时间轴 ─────────────
++     面板与场景是分列的三栏，不再把左右栏覆盖在全屏画布上。 */
++  .app { height: 100dvh; display: grid; overflow: hidden;
++         grid-template-rows: var(--top) minmax(0, 1fr) var(--transport); }
++  .main { position: relative; min-height: 0; display: grid; gap: var(--gap);
++          padding: 0 var(--gap) var(--gap);
++          grid-template-columns: var(--rail) minmax(var(--scene-min), 1fr) var(--console); }
++  body.rail-off .app { --rail: 0px; }
++  body.console-off .app { --console: 0px; }
++  /* 收起时让列宽归 0、内容被裁掉。不能用 display:none —— 那会把网格项从自动定位里
++     摘掉，导致 .scene 顶到第 1 条 0px 的轨道上、反而被压成 2px 宽。 */
++  #rail, #console { min-width: 0; overflow: hidden; }
++  body.rail-off #rail, body.console-off #console { border-width: 0; }
++
++  /* 中央场景容器自己定尺寸；iframe 撑满容器，Three.js 按容器更新（见 app-context.js） */
++  .scene { position: relative; min-width: 0; overflow: hidden; background: #000;
++           border: 1px solid var(--line); }
++  #stage { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #000; }
++  #vignette { position: absolute; inset: 0; pointer-events: none;
+               background: radial-gradient(130% 100% at 50% 45%, transparent 58%, rgba(2, 5, 9, .5) 100%); }
+ 
+-  .panel { position: fixed; background: var(--panel); border: 1px solid var(--line);
+-           box-shadow: 0 10px 34px rgba(0, 0, 0, .55); }
++  .panel { position: relative; background: var(--panel); border: 1px solid var(--line);
++           border-radius: var(--r3); box-shadow: 0 6px 20px rgba(0, 0, 0, .45); }
++  /* 控件文字宁可被容器裁掉，也不许折成逐字竖排（窄栏里踩过这个坑） */
++  .seg button, .tabs button, .btn, .ghostbtn, .tag, summary, .hd { white-space: nowrap; }
+   .tag { display: inline-flex; align-items: center; gap: 5px; padding: 1px 7px; font: 11.5px var(--num);
+-         border: 1px solid var(--line-hot); color: var(--label); white-space: nowrap; }
+-  .tag.ok { color: var(--sel); border-color: rgba(127, 227, 214, .45); }
+-  .tag.warn { color: var(--event); border-color: rgba(232, 163, 61, .5); }
+-  .tag.bad { color: var(--bad); border-color: rgba(216, 96, 75, .55); }
+-  .tag.na { color: var(--na); border-color: #223141; }
++         border: 1px solid var(--line-hot); border-radius: var(--r1); color: var(--label); white-space: nowrap; }
++  .tag.ok { color: var(--ok); border-color: rgba(53, 213, 180, .45); }
++  .tag.warn { color: var(--event); border-color: rgba(255, 184, 63, .5); }
++  .tag.bad { color: var(--bad); border-color: rgba(255, 108, 94, .55); }
++  .tag.na { color: var(--na); border-color: var(--line); }
++  .tag.ecl { color: var(--plan); border-color: var(--line-hot); }
+   .tag i { width: 5px; height: 5px; background: currentColor; }
+ 
+   /* ── 顶栏 ───────────────────────────────────────── */
+-  #topbar { top: 0; left: 0; right: 0; height: var(--top); display: flex; align-items: center; gap: 12px;
+-            padding: 0 14px; border-left: 0; border-right: 0; border-top: 0; z-index: 6; }
+-  #topbar .sys { display: flex; align-items: center; gap: 9px; font: 600 15px/1.1 var(--cn); color: #e6f1fa; }
++  #topbar { display: flex; align-items: center; gap: 12px; padding: 0 14px;
++            border-left: 0; border-right: 0; border-top: 0; overflow: hidden; }
++  #topbar > * { flex: none; }
++  #topbar .grow { flex: 1 1 auto; min-width: 8px; }
++  #topbar .sys { display: flex; align-items: center; gap: 9px; font: 600 15px/1.1 var(--cn); color: #e6f1fa;
++                 white-space: nowrap; }
+   #topbar .sys .mark { width: 22px; height: 22px; border: 1px solid var(--sel); border-radius: 50%;
+                        position: relative; flex: none; }
+   #topbar .sys .mark::after { content: ''; position: absolute; inset: 6px; border-radius: 50%; background: var(--sel); }
+@@ -67,17 +115,17 @@
+   .scenename b { display: block; font: 13px var(--num); color: var(--label); letter-spacing: .02em; }
+   .clockhead { text-align: right; font: 12px var(--num); color: var(--label); letter-spacing: .02em; }
+   .clockhead b { display: block; font-size: 15px; color: var(--txt); }
+-  .ghostbtn { padding: 7px 10px; font: 12px var(--cn); color: var(--label); background: transparent;
++  .ghostbtn { display: inline-flex; align-items: center; padding: 7px 10px; font: 12px var(--cn);
++              color: var(--label); background: transparent; border-radius: var(--r2);
+               border: 1px solid var(--line); cursor: pointer; white-space: nowrap; }
+-  .ghostbtn:hover:not(:disabled) { color: var(--sel); border-color: var(--line-hot); background: rgba(43,74,100,.28); }
++  .ghostbtn:hover:not(:disabled) { color: var(--sel); border-color: var(--line-hot); background: var(--hover); }
+   .ghostbtn:disabled { color: var(--dim); cursor: not-allowed; opacity: .6; }
+   .ghostbtn:focus-visible, .btn:focus-visible, .chip:focus-visible, .tabs button:focus-visible,
+   .tgt:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible {
+     outline: 1px solid var(--sel); outline-offset: 1px; }
+ 
+   /* ── 左栏 ───────────────────────────────────────── */
+-  #rail { top: var(--top); left: 0; bottom: var(--transport); width: var(--rail);
+-          border-left: 0; border-bottom: 0; display: flex; flex-direction: column; overflow-y: auto;
++  #rail { min-height: 0; border-left: 0; display: flex; flex-direction: column; overflow-y: auto;
+           scrollbar-width: thin; scrollbar-color: var(--line-hot) transparent; }
+   #rail::-webkit-scrollbar { width: 7px; }
+   #rail::-webkit-scrollbar-thumb { background: var(--line-hot); }
+@@ -87,33 +135,89 @@
+   .sec { padding: 9px 12px; border-bottom: 1px solid var(--line); }
+   .sec .row { display: flex; align-items: center; gap: 8px; }
+   .sec label { font: 11px var(--cn); color: var(--dim); }
+-  select { background: rgba(11,19,28,.8); border: 1px solid var(--line-hot); color: var(--txt);
+-           font: 12px var(--cn); padding: 4px 6px; }
++  select, input[type=number] { background: var(--bg-panel-raised); border: 1px solid var(--line-hot);
++           color: var(--txt); font: 12px var(--cn); padding: 4px 6px; border-radius: var(--r1); }
+ 
+   .tgt { display: block; width: 100%; text-align: left; padding: 9px 12px; background: transparent;
+          border: 0; border-bottom: 1px solid var(--line); border-left: 3px solid transparent; cursor: pointer; }
+-  .tgt:hover { background: rgba(43, 74, 100, .28); }
+-  .tgt[aria-current="true"] { background: rgba(127, 227, 214, .07); }
++  .tgt:hover { background: var(--hover); }
++  /* 选中态同时给形状与底色，不只换一个颜色（§11.2） */
++  .tgt[aria-current="true"] { background: var(--hover); border-left-color: var(--sel); }
+   .tgt .n { display: flex; align-items: center; gap: 7px; font: 14px var(--num); letter-spacing: .03em; color: #dceaf5; }
+   .tgt .n .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--satc, var(--na)); flex: none; }
+-  .tgt .st { margin-left: auto; font: 11.5px var(--cn); color: var(--sel); }
++  .tgt .st { margin-left: auto; font: 11.5px var(--cn); color: var(--text-primary); }
+   .tgt .st.na { color: var(--na); }
+   .tgt .st.bad { color: var(--bad); }
+   .tgt .g { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 5px; font: 12px var(--num);
+             color: var(--label); font-variant-numeric: tabular-nums; }
+-  .tgt .g em { font-style: normal; color: var(--dim); font-size: 10.5px; margin-right: 3px; }
++  .tgt .g em { font-style: normal; color: var(--dim); font-size: 11px; margin-right: 3px; }
+   .kv { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 4px 0;
+         font-size: 11.5px; color: var(--dim); }
+   .kv b { font: 13px var(--num); font-weight: 500; color: var(--label); font-variant-numeric: tabular-nums; }
+   .kv b.ok { color: var(--sel); }
+   .kv b.bad { color: var(--bad); }
+-  .note { padding: 8px 12px; font-size: 11px; color: var(--na); line-height: 1.6; }
+-  .pending { padding: 9px 12px; font-size: 11.5px; color: var(--na); line-height: 1.65; }
+-  .pending ul { margin: 5px 0 0 15px; }
++  /* 场景配置入口：本阶段只占位，禁用态要看得出来，不是点了没反应的假按钮 */
++  .cfg { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 10px 12px; }
++  .cfgc { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 4px;
++          min-height: 64px; padding: 8px 10px; background: rgba(11, 19, 28, .55);
++          border: 1px dashed var(--line-hot); color: var(--dim); cursor: not-allowed; text-align: left; }
++  .cfgc .t { font: 12.5px var(--cn); }
++  .cfgc .s { font: 11px var(--cn); color: var(--na); }
++  .cfgc:focus-visible { outline: 1px solid var(--sel); outline-offset: 1px; }
++  .cfgc.on { cursor: pointer; border-style: solid; border-color: var(--line-hot);
++             background: rgba(30, 52, 71, .45); color: var(--txt); }
++  .cfgc.on:hover { background: rgba(43, 74, 100, .68); color: var(--sel); }
++  .cfgnote { padding: 0 12px 12px; font-size: 11px; color: var(--na); line-height: 1.6; }
++
++  /* ── 配置抽屉 ───────────────────────────────────── */
++  #drawerMask { position: fixed; inset: 0; z-index: 22; background: rgba(2, 5, 9, .6); }
++  #drawer { position: fixed; z-index: 23; top: var(--top); right: 0; bottom: 0; border-radius: var(--r3) 0 0 var(--r3);
++            width: min(560px, 92vw); display: flex; flex-direction: column;
++            background: var(--raise); border-left: 1px solid var(--line-hot);
++            box-shadow: -14px 0 40px rgba(0, 0, 0, .6); }
++  #drawer > header { display: flex; align-items: center; gap: 10px; padding: 12px 14px;
++                     border-bottom: 1px solid var(--line); }
++  #drawer h2 { font: 600 16px var(--cn); color: #e6f1fa; }
++  #drawer .dsub { font: 11.5px var(--num); color: var(--dim); }
++  #drawer .ddirty { margin-left: auto; font: 11.5px var(--cn); color: var(--event); }
++  #drawer .iconbtn { margin-left: 8px; }
++  #drawer .ddirty ~ .iconbtn { margin-left: 8px; }
++  #drawer .dbody { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
++  #drawer .ftable { width: 100%; border-collapse: collapse; }
++  #drawer .ftable td { padding: 3px 0; vertical-align: middle; }
++  #drawer .ftable td.name { color: var(--label); font-size: 11.5px; width: 46%; }
++  #drawer .ftable td.val { text-align: right; font: 14px var(--num); color: var(--txt); }
++  #drawer .ftable td.unit { text-align: left; width: 54px; padding-left: 8px; color: var(--dim); font-size: 11px; }
++  #drawer .ftable tr.grp td { padding: 10px 0 4px; color: #9fb6cc; font-size: 11.5px; letter-spacing: .04em;
++                              border-bottom: 1px solid var(--line); }
++  #drawer .fnum { width: 100%; padding: 4px 6px; font: 13px var(--num); text-align: right; border-radius: var(--r1);
++                  background: rgba(11, 19, 28, .8); border: 1px solid var(--line-hot); color: var(--txt); }
++  #drawer .fnum:focus-visible { outline: 1px solid var(--sel); outline-offset: 1px; }
++  #drawer .miss { font-size: 11.5px; color: var(--na); }
++  #drawer .more { padding-top: 6px; font-size: 11px; color: var(--dim); }
++  #drawer .derr { padding: 0 14px; font-size: 11.5px; color: var(--bad); }
++  #drawer .derr:empty { padding: 0; }
++  #drawer .derr ul { margin: 6px 0 0 16px; }
++  #drawer > footer { display: flex; gap: 8px; justify-content: flex-end; padding: 12px 14px;
++                    border-top: 1px solid var(--line); }
++  #drawer > footer .grow { flex: 1; min-width: 0; }
++                     border-top: 1px solid var(--line); }
++  #drawer .btn:disabled { opacity: .5; cursor: not-allowed; }
++  #drawer .btn.primary { border-color: rgba(127, 227, 214, .5); }
++
++  /* ── 导出对话框 ─────────────────────────────────── */
++  #exportBox { position: fixed; inset: 0; z-index: 24; display: flex; align-items: center;
++               justify-content: center; background: rgba(2, 5, 9, .6); }
++  #exportBox .ebox { width: min(400px, 92vw); background: var(--raise); border: 1px solid var(--line-hot); border-radius: var(--r3);
++                     padding: 16px; box-shadow: 0 16px 46px rgba(0, 0, 0, .6); }
++  #exportBox h3 { font: 600 15px var(--cn); color: #e6f1fa; margin-bottom: 10px; }
++  #exportBox .erow { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 12px; }
++  #exportBox .erow span { width: 72px; color: var(--label); }
++  #exportBox .etip { font-size: 11.5px; color: var(--na); margin: 8px 0 12px; line-height: 1.6; }
++  #exportBox .ebtn { display: flex; gap: 8px; justify-content: flex-end; }
+ 
+   /* ── 右栏 ───────────────────────────────────────── */
+-  #console { top: var(--top); right: 0; bottom: var(--transport); width: var(--console);
+-             border-right: 0; border-bottom: 0; display: flex; flex-direction: column; }
++  #console { min-height: 0; border-right: 0; display: flex; flex-direction: column; }
+   .tabs { display: flex; border-bottom: 1px solid var(--line); background: rgba(7,13,20,.6); flex: none; }
+   .tabs button { flex: 1; padding: 10px 2px; font: 12px var(--cn); color: var(--label);
+                  background: transparent; border: 0; border-bottom: 2px solid transparent; cursor: pointer; }
+@@ -123,7 +227,8 @@
+   #console .body::-webkit-scrollbar { width: 7px; }
+   #console .body::-webkit-scrollbar-thumb { background: var(--line-hot); }
+   .hero { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line); }
+-  .hero .cell { background: rgba(11, 19, 28, .6); padding: 10px 12px; }
++  .hero { border-radius: var(--r1); overflow: hidden; }
++  .hero .cell { background: var(--bg-panel-raised); padding: 10px 12px; }
+   .hero .k { font: 11px var(--cn); color: var(--dim); }
+   .hero .v { margin-top: 2px; font: 24px/1.05 var(--num); color: var(--sel); font-variant-numeric: tabular-nums; }
+   .hero .v u { text-decoration: none; font-size: 12px; color: var(--dim); margin-left: 4px; }
+@@ -142,6 +247,11 @@
+   .cmp td.bad { color: var(--bad); }
+   .cmp td.ok { color: var(--sel); }
+   .cmp .bar { display: block; height: 2px; margin-top: 3px; background: var(--satc, var(--sel)); opacity: .8; }
++  .cmp tr[data-sat] { cursor: pointer; }
++  .cmp tr[data-sat]:hover td { background: rgba(43, 74, 100, .28); }
++  .cmp tr.sel td { background: rgba(127, 227, 214, .08); }
++  .cmp td .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px;
++                 vertical-align: middle; }
+ 
+   details { border-bottom: 1px solid var(--line); }
+   summary { padding: 9px 12px; font: 600 12px var(--cn); letter-spacing: .04em; color: #a2bad0;
+@@ -158,7 +268,7 @@
+                    font-variant-numeric: tabular-nums; white-space: nowrap; }
+   .ptable td.val.na { color: var(--na); font-size: 12px; }
+   .ptable td.val.bad { color: var(--bad); }
+-  .ptable td.unit { text-align: left; width: 54px; padding-left: 8px; color: var(--dim); font-size: 10.5px; }
++  .ptable td.unit { text-align: left; width: 54px; padding-left: 8px; color: var(--dim); font-size: 11px; }
+   .ptable tr.group td { padding: 10px 0 4px; color: #9fb6cc; font-size: 11.5px; letter-spacing: .04em;
+                         border-bottom: 1px solid var(--line); }
+   .ptable tr.group:first-child td { padding-top: 2px; }
+@@ -168,7 +278,13 @@
+   .chart .ch-hd { display: flex; align-items: baseline; gap: 8px; }
+   .chart .ch-hd h3 { font: 600 12px var(--cn); color: #a9c0d6; letter-spacing: .03em; }
+   .chart .ch-hd .sub { margin-left: auto; font: 11px var(--num); color: var(--dim); }
+-  .chart canvas { display: block; width: 100%; height: 104px; margin-top: 6px; cursor: crosshair; }
++  /* V0.3 §6.1：趋势图高 170–210px。原来 104px 会把三条一小时曲线挤成一团。 */
++  .chart canvas { display: block; width: 100%; height: 178px; margin-top: 6px; cursor: crosshair; }
++  /* 空态块：说清楚是哪一类空、缺在哪，不留一张让人误以为坏了的空图 */
++  .chart .empty { display: flex; flex-direction: column; gap: 5px; margin-top: 8px; padding: 12px; border-radius: var(--r1);
++                  border: 1px dashed var(--line-hot); background: rgba(11,19,28,.5); }
++  .chart .empty b { font: 12.5px var(--cn); color: var(--na); }
++  .chart .empty span { font: 11.5px var(--cn); color: var(--dim); line-height: 1.6; }
+   .legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 5px; font: 11px var(--num); color: var(--label); }
+   .legend span { display: inline-flex; align-items: center; gap: 4px; }
+   .legend i { width: 9px; height: 2px; background: currentColor; }
+@@ -184,11 +300,10 @@
+            font: 12.5px var(--cn); color: var(--txt); box-shadow: 0 8px 26px rgba(0,0,0,.6); }
+   #toast.bad { color: var(--bad); border-color: rgba(216,96,75,.55); }
+ 
+-  /* ── 三维区浮层：图例开关 + 视角工具 ─────────────── */
+-  #sceneTools { position: fixed; z-index: 5; top: calc(var(--top) + 10px); pointer-events: none;
+-                left: calc(var(--rail) + 12px); right: calc(var(--console) + 12px);
++  /* ── 三维区浮层：图层开关 + 相机工具（浮在场景容器内，不参与世界坐标） */
++  #sceneTools { position: absolute; z-index: 3; top: 10px; left: 12px; right: 12px;
++                pointer-events: none;
+                 display: flex; align-items: flex-start; gap: 10px; }
+-  body.tight #sceneTools { left: 12px; right: 12px; }
+   #layers { pointer-events: auto; display: flex; flex-direction: column; gap: 5px; padding: 8px 10px;
+             background: rgba(6,12,19,.72); border: 1px solid var(--line); }
+   #layers .chip { display: flex; align-items: center; gap: 7px; font: 11.5px var(--cn); color: var(--dim);
+@@ -198,6 +313,21 @@
+   #layers .chip[aria-pressed="true"] .box { border-color: var(--sel); }
+   #layers .chip[aria-pressed="true"] .box::after { content: ''; position: absolute; inset: 2px; background: var(--sel); }
+   #layers .chip .ln { width: 14px; height: 2px; background: var(--satc, currentColor); flex: none; }
++  /* XYZ 方向轴指示器：屏幕空间小窗，不参与世界坐标缩放 */
++  #axes { position: absolute; left: 12px; bottom: 12px; width: 72px; height: 72px; pointer-events: none; z-index: 2; }
++  #axes svg { width: 100%; height: 100%; overflow: visible; }
++  /* 编队局部放大窗：真实 RTN 相对位置，只做显示增强，绝不回写轨道坐标 */
++  #formationInset { position: absolute; right: 12px; bottom: 12px; width: 240px; height: 176px; border-radius: var(--r2);
++                    display: flex; flex-direction: column; z-index: 2;
++                    background: rgba(6,12,19,.84); border: 1px solid var(--line); }
++  #formationInset .fi-hd { padding: 5px 8px; font: 11.5px var(--cn); color: #a2bad0;
++                           border-bottom: 1px solid var(--line); display: flex; align-items: baseline; }
++  #formationInset .fi-sub { margin-left: auto; color: var(--dim); font-size: 11px; }
++  #formationInset canvas { flex: 1; width: 100%; min-height: 0; display: block; }
++  #formationInset .fi-ft { padding: 4px 8px; font: 11px var(--num); color: var(--label);
++                           border-top: 1px solid var(--line); font-variant-numeric: tabular-nums; }
++  #layers .chip:disabled { cursor: not-allowed; }
++  #layers .chip.off { opacity: .34; }
+   #viewtools { pointer-events: auto; margin-left: auto; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+   #viewtools .row { display: flex; gap: 6px; }
+   .iconbtn { width: 30px; height: 30px; display: flex; align-items: center; justify-content: center;
+@@ -206,19 +336,12 @@
+   .iconbtn:hover { color: var(--sel); border-color: var(--line-hot); }
+   select.viewsel { background: rgba(6,12,19,.72); border: 1px solid var(--line); padding: 5px 7px; }
+ 
+-  /* 地面观察读数 */
+-  #groundReadout { position: fixed; z-index: 5; left: calc(var(--rail) + 12px); bottom: calc(var(--transport) + 12px);
+-                   width: 268px; background: rgba(6,12,19,.8); border: 1px solid var(--line); }
+-  #groundReadout .hd { border-bottom: 1px solid var(--line); }
+-  #groundReadout .kv { padding: 5px 12px; border-top: 0; }
+-  #groundReadout .kv:first-of-type { border-top: 1px solid var(--line); }
+-
+   /* ── 底部时间轴 ─────────────────────────────────── */
+-  #transport { left: 0; right: 0; bottom: 0; height: var(--transport); display: flex; align-items: stretch;
+-               border-left: 0; border-right: 0; border-bottom: 0; z-index: 6; }
++  #transport { display: flex; align-items: stretch;
++               border-left: 0; border-right: 0; border-bottom: 0; }
+   .grp { display: flex; flex-direction: column; justify-content: center; gap: 6px; padding: 10px 12px;
+          border-right: 1px solid var(--line); }
+-  .grp .gl { font: 10.5px var(--cn); letter-spacing: .06em; color: var(--dim); }
++  .grp .gl { font: 11px var(--cn); letter-spacing: .06em; color: var(--dim); }
+   .grp .gr { display: flex; align-items: center; gap: 7px; }
+   .btn { padding: 6px 11px; font: 12.5px var(--cn); color: var(--txt); background: rgba(30, 52, 71, .5);
+          border: 1px solid var(--line-hot); cursor: pointer; }
+@@ -244,24 +367,25 @@
+   .tl .band { position: absolute; top: 0; height: 100%; background: var(--event); opacity: .85; }
+   .tl .band.disp { top: 0; background: var(--sel); opacity: .8; }
+   .tl .evs { position: absolute; left: 0; right: 0; top: -1px; height: 10px; pointer-events: none; }
+-  /* 事件按类别给不同形状：颜色不再独自承担含义 */
+-  .tl .ev { position: absolute; top: 2px; width: 7px; height: 7px; margin-left: -3.5px; }
++  /* 事件标记可点：点一下跳到 t_actual 对应时刻 */
++  .tl .ev { position: absolute; top: 2px; width: 7px; height: 7px; margin-left: -3.5px;
++            pointer-events: auto; cursor: pointer; }
+   .tl .ev.strobe { background: var(--event); }
+   .tl .ev.window { background: var(--sel); border-radius: 50%; }
+   .tl .ev.maneuver { width: 0; height: 0; background: transparent; border-left: 4px solid transparent;
+                      border-right: 4px solid transparent; border-bottom: 7px solid #9db2c6; margin-left: -4px; }
+   .tl .ev.task { background: #c78bd8; transform: rotate(45deg); }
+-  .tl .ev.eclipse { background: transparent; border: 1.5px solid #6fa8dc; border-radius: 50%; }
++  .tl .ev.eclipse { background: transparent; border: 1.5px solid #9ecbff; border-radius: 50%; }
+   .tl .ev.other { background: var(--bad); transform: rotate(45deg); }
+   .tl .ticks { position: absolute; left: 0; right: 0; top: 20px; height: 6px; border-left: 1px solid var(--line-hot); }
+   .tl .tick { position: absolute; top: 0; width: 1px; height: 4px; background: var(--line-hot); }
+-  .tl .ticklab { position: absolute; top: 3px; font: 9.5px var(--num); color: var(--dim); transform: translateX(-50%); }
++  .tl .ticklab { position: absolute; top: 3px; font: 11px var(--num); color: var(--dim); transform: translateX(-50%); }
+   #stepSlider { position: absolute; inset: 0; width: 100%; height: 26px; margin: 0;
+                 -webkit-appearance: none; appearance: none; background: transparent; cursor: ew-resize; }
+   #stepSlider::-webkit-slider-thumb { -webkit-appearance: none; width: 2px; height: 25px; background: var(--sel);
+-                                      box-shadow: 0 0 9px rgba(127, 227, 214, .85); }
++                                      box-shadow: 0 0 6px rgba(40, 207, 200, .5); }
+   #stepSlider::-moz-range-thumb { width: 2px; height: 25px; border: 0; border-radius: 0; background: var(--sel);
+-                                  box-shadow: 0 0 9px rgba(127, 227, 214, .85); }
++                                  box-shadow: 0 0 6px rgba(40, 207, 200, .5); }
+   #stepSlider::-webkit-slider-runnable-track, #stepSlider::-moz-range-track { background: transparent; }
+   .legend .shp { width: 7px; height: 7px; background: currentColor; display: inline-block; }
+   .legend .shp.round { border-radius: 50%; }
+@@ -271,17 +395,16 @@
+   .legend .shp.ring { background: transparent; border: 1.5px solid currentColor; border-radius: 50%; }
+   #grpCurves { border-right: 0; }
+ 
+-  /* 面板收起：把屏幕让给三维 */
+-  #rail, #console { transition: transform .22s ease; }
+-  body.rail-off #rail { transform: translateX(-105%); }
+-  body.console-off #console { transform: translateX(105%); }
+-
+-  @media (max-width: 1400px) { :root { --console: 330px; --rail: 272px; } }
+-  @media (max-width: 1120px) {
+-    /* 窄屏不再无限压缩三维：两侧转抽屉，由按钮唤出 */
+-    #rail, #console { width: min(88vw, 340px); z-index: 7; }
+-    #sceneTools { left: 12px; right: 12px; }
+-    #groundReadout { left: 12px; }
++  /* 窄屏：顶栏先让掉低频信息，避免按钮被挤成逐字竖排 */
++  @media (max-width: 1600px) { #topbar .scenename { display: none; } }
++  @media (max-width: 1480px) { #topbar a.ghostbtn { display: none; } }
++  /* V0.3 §2.2：≤1280 时右栏转成抽屉覆盖，不把中央场景挤得过窄 */
++  @media (max-width: 1280px) {
++    .main { grid-template-columns: var(--rail) minmax(0, 1fr); }
++    #console { position: absolute; top: 0; bottom: var(--gap); right: var(--gap);
++               width: min(88vw, 410px); z-index: 8; }
++    /* 右栏转抽屉后会盖住右下角，小窗挪到左侧（方向轴只占 84px 宽） */
++    #formationInset { left: 92px; right: auto; }
+   }
+   @media (prefers-reduced-motion: no-preference) {
+     /* backwards：入场结束后不再占用 transform，否则面板收起的位移会被动画填充覆盖 */
+@@ -293,9 +416,7 @@
+ </style>
+ </head>
+ <body>
+-<iframe id="stage" src="/web/?bare=1" title="编队三维态势"></iframe>
+-<div id="vignette"></div>
+-
++<div class="app">
+ <header class="panel" id="topbar">
+   <div class="sys"><span class="mark" aria-hidden="true"></span>天幕卫星仿真系统</div>
+   <span class="sep"></span>
+@@ -315,23 +436,25 @@
+   <button class="ghostbtn" id="btnSave" disabled title="把当前场景参数与显示偏好存为 JSON 文件（浏览器下载，不存服务器）">保存场景</button>
+   <button class="ghostbtn" id="btnExport" disabled title="导出真实存在的数据字段，空值不填 0">导出结果</button>
+   <button class="ghostbtn" id="btnFull" title="全屏（Esc 退出）">全屏</button>
+-  <div class="clockhead">仿真时刻<b id="utcg">--</b></div>
++  <div class="clockhead">仿真时刻 (UTC)<b id="utcg">--</b></div>
+   <span class="sep"></span>
+   <button class="ghostbtn" id="btnRail" aria-pressed="true" title="收起/展开左侧控制区">左栏</button>
+   <button class="ghostbtn" id="btnConsole" aria-pressed="true" title="收起/展开右侧状态区">右栏</button>
+-  <a class="ghostbtn" href="/web/" target="_blank" rel="noopener" style="display:flex;align-items:center"
++  <a class="ghostbtn" href="/web/" target="_blank" rel="noopener"
+      title="在新标签页打开 StarTM 观测终端（独立于本工作台）">观测终端</a>
+ </header>
+ 
++<div class="main">
+ <nav class="panel" id="rail" aria-label="场景控制与卫星列表">
+-  <div class="hd">场景控制<span class="r" id="kvRate">1×</span></div>
++  <div class="hd">场景与运行状态<span class="r" id="kvRate">1×</span></div>
+   <div class="sec">
+     <div class="row" style="justify-content:space-between">
+       <span class="kv" style="flex:1;padding:0"><span>仿真时刻</span><b id="kvTplus" style="font:13px var(--num)">T+--:--:--</b></span>
+       <span class="kv" style="flex:1;padding:0;justify-content:flex-end"><span>进度</span><b id="kvPct">--</b></span>
+     </div>
+-    <div class="kv"><span>数据时长 / 采样</span><b id="kvSpan">--</b></div>
+-    <div class="kv"><span>参数版本</span><b id="kvVer">--</b></div>
++    <div class="kv"><span>场景标识</span><b id="kvMission">--</b></div>
++    <div class="kv"><span>数据性质</span><b id="kvKind">未加载</b></div>
++    <div class="kv"><span>卫星 / 采样 / 历元</span><b id="kvMeta">--</b></div>
+   </div>
+ 
+   <div class="hd">卫星列表<span class="r" id="tgtCount">3 颗</span></div>
+@@ -340,19 +463,46 @@
+   <div class="hd">任务状态</div>
+   <div class="sum" id="missionSum" style="padding:4px 12px 10px"></div>
+ 
+-  <div class="hd">场景配置</div>
+-  <div class="pending">参数修改与重新运行<b style="color:var(--label)">本轮未开放</b>：轨道参数与 STK 的对接尚未完成，
+-    先不做改参数重跑，以免对着错的参数源做界面。将开放的分组：
+-    <ul><li>轨道与编队（初始根数、仿真时长、采样间隔）</li>
+-        <li>姿态（对地 / 对日模式与切换时刻、太阳翼设置）</li>
+-        <li>能源（电池容量、初始 SOC、发电参数）</li>
+-        <li>设备功耗与发热（逐台功率、发热量、启停时间）</li>
+-        <li>热控（初始温度、热参数、主动热控）</li></ul></div>
+-
+-  <div class="note">三维画面为概略显示，几何判据以数据文件为准；事件按真实时刻单点显示，不插值。<br>
+-    线框说明：彩线为该星实际轨迹（取数据里前后各半个轨道周期的逐秒位置连成，随走带一起移动），暖白细线为晨昏线（由太阳星历方向画出），地球外淡蓝一圈是大气边缘装饰，不表示物理大气。卫星落在夜半球不等于进地影：本数据集 24 h 全程未进本影，是否受遮挡以光照徽标上的本影裕度为准。</div>
++  <div class="cfgnote">三维模型本体按状态着色：绿=在地平以上、红=地平以下、黄=计划开灯。三星身份色看轨迹环、引线与标签。</div>
++  <div class="hd">场景配置<span class="r">可看不可重跑</span></div>
++  <div class="cfg">
++    <button class="cfgc on" type="button" id="cfgOrbit" title="打开场景配置抽屉的「轨道与编队」分组">
++      <span class="t">轨道参数</span><span class="s">查看</span></button>
++    <button class="cfgc on" type="button" id="cfgAtt" title="打开场景配置抽屉的「姿态与太阳翼」分组">
++      <span class="t">姿态参数</span><span class="s">查看</span></button>
++    <button class="cfgc on" type="button" id="cfgPower" title="打开场景配置抽屉的「能源系统」分组">
++      <span class="t">能源参数</span><span class="s">查看</span></button>
++    <button class="cfgc on" type="button" id="cfgThermal" title="打开场景配置抽屉的「热控参数」分组">
++      <span class="t">热控参数</span><span class="s">查看</span></button>
++  </div>
++  <div class="cfgnote">参数可看可改，但「应用并重新运行」要等仿真计算引擎接入；当前数据为固定结果回放，改完不会重算。</div>
+ </nav>
+ 
++    <div class="scene" id="scene">
++      <iframe id="stage" src="/web/?bare=1" title="编队三维态势"></iframe>
++      <div id="vignette"></div>
++      <div id="sceneTools">
++        <div id="layers" role="group" aria-label="显示图层"></div>
++        <div id="viewtools">
++          <select class="viewsel" id="camSel" aria-label="相机模式">
++            <option value="global">地球全景</option>
++            <option value="follow">目标跟随</option>
++            <option value="formation">编队近景</option>
++          </select>
++          <div class="row">
++            <button class="iconbtn" id="btnReset" title="视角复位到地球全景">⌂</button>
++            <button class="iconbtn" id="btnDaylight" title="把相机挪到站址与日下点之间，使晨昏线落在可见圆盘上">☀</button>
++          </div>
++        </div>
++      </div>
++      <div id="axes" aria-hidden="true"><svg viewBox="-1 -1 2 2"></svg></div>
++      <div id="formationInset">
++        <div class="fi-hd">编队局部放大 · 非同尺度<span class="fi-sub">RTN 相对位置</span></div>
++        <canvas></canvas>
++        <div class="fi-ft" id="fiFoot">未加载</div>
++      </div>
++    </div>
++
+ <aside class="panel" id="console" aria-label="状态与趋势">
+   <div class="tabs" id="detailTabs" role="tablist" aria-label="详情标签">
+     <button role="tab" data-tab="formation" class="on" aria-selected="true">编队总览</button>
+@@ -367,15 +517,21 @@
+       <div class="hero" id="formationHero"></div>
+       <div class="hd">卫星关键指标对比<span class="r" id="cmpSatNote"></span></div>
+       <div class="cmp" id="cmpBody"></div>
++      <div class="hd">星间距离<span class="r" id="edgeNote"></span></div>
++      <div class="cmp" id="edgeRows"></div>
+       <div class="chart" id="chEdge"></div>
+     </div>
+-    <div id="tabSat" hidden>
++    <div id="selStrip" hidden>
+       <div class="hd">选中目标<span class="r" id="kvSat">TM0S1</span></div>
+       <div class="hero" id="hero"></div>
+       <div class="strip" id="badges"></div>
++    </div>
++    <div id="tabSat" hidden>
+       <div id="tabPanes"></div>
+-      <div class="chart" id="chDrift"></div>
+-      <div class="chart" id="chSun"></div>
++      <div class="chart" id="chOrbit" hidden></div>
++      <div class="chart" id="chAttitude" hidden></div>
++      <div class="chart" id="chPower" hidden></div>
++      <div class="chart" id="chThermal" hidden></div>
+       <details>
+         <summary>表2-1 全参数<span class="r" id="kvLag">--</span></summary>
+         <div class="inner"><table class="ptable"><tbody id="panelBody">
+@@ -391,33 +547,22 @@
+       <div class="hd">地面观察<span class="r">同一仿真时钟</span></div>
+       <div class="sec">
+         <div class="row" style="gap:6px">
+-          <label for="obsLat">纬度</label><input id="obsLat" type="number" step="0.0001" value="31.8206" style="width:78px">
+-          <label for="obsLon">经度</label><input id="obsLon" type="number" step="0.0001" value="117.2272" style="width:84px">
+-          <button class="btn" id="btnObs">应用</button>
++          <label for="obsLat">纬度</label><input id="obsLat" type="number" step="0.0001" value="31.8206" style="width:78px" disabled>
++          <label for="obsLon">经度</label><input id="obsLon" type="number" step="0.0001" value="117.2272" style="width:84px" disabled>
++          <button class="btn" id="btnObs" disabled>应用</button>
+         </div>
+-        <div class="kv" style="padding-top:7px"><span>观察点</span><b id="kvObs">合肥 31.8206°N 117.2272°E</b></div>
++        <div class="kv" style="padding-top:7px"><span>观察点</span><b id="kvObs">固定站</b></div>
++        <div class="cfgnote" style="padding:6px 0 0">当前结果使用固定观察站：本数据集的方位角、仰角、斜距是按该站一次性算出的，改经纬度不会重算这些读数，所以输入框禁用。天空视图里的站心换算可以跟着新站址走，但那是另一套数，不拿来冒充表里的值。</div>
+       </div>
+       <div class="hd">天空中的三颗卫星<span class="r">仰角 ≥ 0° 为在地平以上</span></div>
+       <div class="cmp" id="groundBody"></div>
+-      <div class="note">方位角、仰角、斜距取自数据文件（站心 ENU），不是靠移动相机凑出来的；地平线以下的卫星在列表里仍可读，天空视图不画。</div>
++      <div class="chart" id="chSun" hidden></div>
++      <div id="paneGround"></div>
++      <div class="note">方位角、仰角、斜距取自数据文件（站心 ENU），不是靠移动相机凑出来的。三维天空视图把编队张角放大了 5 倍以便分辨三颗星，属<b>局部放大 · 非同尺度</b>；地平线以下的卫星在列表里仍可读，天空视图不画。</div>
+     </div>
+   </div>
+ </aside>
+-
+-<div id="sceneTools">
+-  <div id="layers" role="group" aria-label="显示图层"></div>
+-  <div id="viewtools">
+-    <select class="viewsel" id="camSel" aria-label="相机模式">
+-      <option value="third">自由视角</option>
+-      <option value="follow">跟随选中星</option>
+-      <option value="center">编队近景</option>
+-    </select>
+-    <div class="row">
+-      <button class="iconbtn" id="btnReset" title="视角复位">⌂</button>
+-      <button class="iconbtn" id="btnDaylight" title="把相机挪到站址与日下点之间，使晨昏线落在可见圆盘上">☀</button>
+-    </div>
+-  </div>
+-</div>
++  </div><!-- /.main -->
+ 
+ <footer class="panel" id="transport">
+   <div class="grp" id="grpPlay">
+@@ -451,19 +596,51 @@
+     <div class="legend" id="bandLegend" style="gap:14px"></div>
+   </div>
+   <div class="grp" id="grpCurves">
+-    <span class="gl">显示</span>
+-    <div class="gr" style="gap:7px">
+-      <div class="seg" id="curveSel" role="group" aria-label="曲线选择">
+-        <button data-curve="edge" class="on">星间距离</button>
+-        <button data-curve="sun">目标区太阳高度</button>
+-      </div>
+-    </div>
++    <span class="gl">曲线</span>
+     <div class="gr"><span class="gl" style="letter-spacing:0">曲线区在右栏底部，点击曲线可定位时间</span></div>
+   </div>
+ </footer>
++</div><!-- /.app -->
++
++<div id="drawerMask" hidden></div>
++<section id="drawer" hidden role="dialog" aria-modal="true" aria-labelledby="drawerTitle">
++  <header>
++    <h2 id="drawerTitle">场景配置</h2>
++    <span class="dsub" id="kvDrawerScene">未加载</span>
++    <span class="ddirty" id="drawerDirty" hidden>有未应用更改</span>
++    <button class="iconbtn" id="btnDrawerClose" aria-label="关闭" title="关闭">✕</button>
++  </header>
++  <div class="dbody" id="drawerBody"></div>
++  <div class="derr" id="drawerErr" role="alert"></div>
++  <footer>
++    <button class="btn" id="btnLoad">加载场景文件</button>
++    <input type="file" id="loadFile" accept="application/json,.json" hidden>
++    <span class="grow"></span>
++    <button class="btn" id="btnRestore">恢复默认</button>
++    <button class="btn" id="btnCancel">取消</button>
++    <button class="btn primary" id="btnApply" disabled
++            title="仿真计算引擎尚未接入（轨道侧与 STK 的对接未完成），无法改参数重跑。现在改只会改到界面数字，不会改到结果，所以按钮保持禁用。">
++      应用并重新运行</button>
++  </footer>
++</section>
++
++<div id="exportBox" hidden role="dialog" aria-modal="true" aria-labelledby="expTitle">
++  <div class="ebox">
++    <h3 id="expTitle">导出结果</h3>
++    <label class="erow"><span>目标</span>
++      <select id="expScope"><option value="one">当前选中卫星</option><option value="all">全部三颗</option></select></label>
++    <label class="erow"><span>时间范围</span>
++      <select id="expRange"><option value="all">全程</option><option value="win">游标前后各 10 分钟</option></select></label>
++    <p class="etip">只导出真实存在的字段；空值保持为空，不填 0。</p>
++    <div class="ebtn">
++      <button class="btn" id="expCancel">取消</button>
++      <button class="btn on" id="expGo">导出 CSV</button>
++    </div>
++  </div>
++</div>
+ 
+ <div id="tip"></div>
+ <div id="toast" role="status" aria-live="polite"></div>
+-<script type="module" src="./js/main.js?v=32"></script>
++<script type="module" src="./js/main.js?v=34"></script>
+ </body>
+ </html>
+diff --git a/sim/js/chart.js b/sim/js/chart.js
+index b2458b0..555f9a4 100644
+--- a/sim/js/chart.js
++++ b/sim/js/chart.js
+@@ -1,9 +1,9 @@
+ // 趋势图：手绘 canvas。带允许带、规划虚线、当前时刻游标、悬停读数与点击定位。
+ // 图例与数值由调用方在 DOM 里呈现（panels.js），这里只画图形。
+-const GRID = 'rgba(38, 58, 76, .55)';
+-const TEXT = '#6a8095';
+-const BAND = 'rgba(216, 96, 75, .13)';
+-const CURSOR = 'rgba(127, 227, 214, .55)';
++const GRID = 'rgba(23, 54, 75, .75)';
++const TEXT = '#60788c';
++const BAND = 'rgba(255, 108, 94, .12)';
++const CURSOR = 'rgba(40, 207, 200, .5)';
+ 
+ export function createChart(canvas, { fmtY = v => Math.round(v * 10) / 10, onPick } = {}) {
+     const ctx = canvas.getContext('2d');
+@@ -37,6 +37,10 @@ export function createChart(canvas, { fmtY = v => Math.round(v * 10) / 10, onPic
+         if (!n) { ctx.fillStyle = TEXT; ctx.fillText('暂无数据', 8, 18); return; }
+         if (opts.band) { y0 = Math.min(y0, opts.band.lo, opts.band.hi); y1 = Math.max(y1, opts.band.lo, opts.band.hi); }
+         if (opts.plan) { y0 = Math.min(y0, opts.plan.y); y1 = Math.max(y1, opts.plan.y); }
++        // 每条线各自的对错带（三条边长初始值不同，不能拿一条带判三条线）
++        for (const s of series) if (s.band) {
++            y0 = Math.min(y0, s.band.lo, s.band.hi); y1 = Math.max(y1, s.band.lo, s.band.hi);
++        }
+         box.x0 = x0; box.x1 = x1;
+         if (box.x1 === box.x0) box.x1 = box.x0 + 1;
+         if (y1 === y0) { y1 = y0 + 1; y0 -= 1; }
+@@ -49,6 +53,13 @@ export function createChart(canvas, { fmtY = v => Math.round(v * 10) / 10, onPic
+             const a = py(Math.max(opts.band.lo, opts.band.hi)), b = py(Math.min(opts.band.lo, opts.band.hi));
+             ctx.fillStyle = BAND; ctx.fillRect(box.L, a, box.R - box.L, b - a);
+         }
++        for (const s of series) {
++            if (!s.band) continue;
++            const a = py(Math.max(s.band.lo, s.band.hi)), b = py(Math.min(s.band.lo, s.band.hi));
++            ctx.globalAlpha = .12; ctx.fillStyle = s.color;
++            ctx.fillRect(box.L, a, box.R - box.L, b - a);
++            ctx.globalAlpha = 1;
++        }
+         // 网格与纵刻度（上/中/下三值）
+         ctx.strokeStyle = GRID; ctx.fillStyle = TEXT; ctx.lineWidth = 1;
+         for (let g = 0; g <= 2; g++) {
+@@ -56,9 +67,15 @@ export function createChart(canvas, { fmtY = v => Math.round(v * 10) / 10, onPic
+             ctx.beginPath(); ctx.moveTo(box.L, yy); ctx.lineTo(box.R, yy); ctx.stroke();
+             ctx.fillText(fmtY(yv), 3, yy + 3);
+         }
+-        // 横轴：起点、当前游标、终点
+-        ctx.fillText(tlab(box.x0), box.L, H - 3);
+-        ctx.fillText(tlab(box.x1), box.R - 42, H - 3);
++        // 横轴：五档刻度 + 当前游标，只标起止会让「这一小时走了多久」无从判断
++        for (let g = 0; g <= 4; g++) {
++            const xv = box.x0 + (box.x1 - box.x0) * g / 4, xx = px(xv);
++            ctx.strokeStyle = GRID; ctx.beginPath();
++            ctx.moveTo(xx, box.B); ctx.lineTo(xx, box.B + 3); ctx.stroke();
++            const s = tlab(xv), wpx = s.length * 5.6;
++            ctx.fillStyle = TEXT;
++            ctx.fillText(s, Math.max(box.L, Math.min(xx - wpx / 2, box.R - wpx)), H - 3);
++        }
+         // 规划值虚线
+         if (opts.plan && opts.plan.y >= y0 && opts.plan.y <= y1) {
+             ctx.strokeStyle = '#8a9aab'; ctx.setLineDash([4, 4]);
+@@ -75,12 +92,26 @@ export function createChart(canvas, { fmtY = v => Math.round(v * 10) / 10, onPic
+             s.data.forEach((p, i) => { const X = px(p.x), Y = py(p.y); i ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y); });
+             ctx.stroke();
+             ctx.setLineDash([]);
+-            if (opts.band) {
+-                ctx.fillStyle = '#d8604b';
+-                s.data.forEach(p => {
+-                    if (p.y >= opts.band.lo && p.y <= opts.band.hi) return;
+-                    ctx.beginPath(); ctx.arc(px(p.x), py(p.y), 2.2, 0, Math.PI * 2); ctx.fill();
+-                });
++            const bd = s.band || opts.band;
++            if (bd) {
++                // 越限怎么画。本数据集是自由漂移（mode=FreeDrift-Synthetic），三条边长对初始
++                // 构型的偏离本就远超 ±10 m，实测约 89.5% 的采样点在带外，而且逐点在带内外来回
++                // 穿越——逐点画圆、按段描红、按段填色都会糊成锯齿。
++                // 这里只保留：允许带本身 + 三条线 + 每条线一个最大越限点标记，
++                // 越限比例交给图例用数字说清。阈值与标称值一个字节都不改。
++                let worst = null;
++                for (const q of s.data) {
++                    if (q.y >= bd.lo && q.y <= bd.hi) continue;
++                    const d = q.y > bd.hi ? q.y - bd.hi : bd.lo - q.y;
++                    if (!worst || d > worst.d) worst = { d, q };
++                }
++                s.outRatio = s.data.length
++                    ? s.data.filter(q => q.y < bd.lo || q.y > bd.hi).length / s.data.length
++                    : 0;
++                if (worst) {
++                    ctx.fillStyle = '#d8604b';
++                    ctx.beginPath(); ctx.arc(px(worst.q.x), py(worst.q.y), 3, 0, Math.PI * 2); ctx.fill();
++                }
+             }
+         });
+         // 当前时刻游标
+@@ -131,5 +162,10 @@ export function createChart(canvas, { fmtY = v => Math.round(v * 10) / 10, onPic
+         return `T+${String(Math.floor(s / 3600)).padStart(2, '0')}:${String(Math.floor(s % 3600 / 60)).padStart(2, '0')}`;
+     }
+ 
+-    return { setData, draw };
++    // 给验收用的自证：坐标窗、每条线的带与采样点数。只读，不参与绘制。
++    return { setData, draw, diag: () => ({ x0: box.x0, x1: box.x1, y0: box.y0, y1: box.y1,
++        series: series.map(s => ({ name: s.name, n: s.data.length, band: s.band || null,
++                                   outRatio: s.outRatio === undefined ? null : s.outRatio,
++                                   firstX: s.data.length ? s.data[0].x : null,
++                                   lastX: s.data.length ? s.data[s.data.length - 1].x : null })) }) };
+ }
+diff --git a/sim/js/panels.js b/sim/js/panels.js
+index a5f8091..a043847 100644
+--- a/sim/js/panels.js
++++ b/sim/js/panels.js
+@@ -1,9 +1,9 @@
+-import { loadCategory, getValue, getStepSec, lastSecond } from './loader.js?v=32';
+-import { createChart } from './chart.js?v=32';
++import { loadCategory, getValue, getStepSec, lastSecond, hasField } from './loader.js?v=34';
++import { createChart } from './chart.js?v=34';
+ 
+ const $ = (id) => document.getElementById(id);
+ // 三星身份色：与三维轨迹线、图例、曲线图例同一套，跨视图不变（方案 §8.1）
+-export const SAT_COLORS = ['#7fe3d6', '#6fa8dc', '#e8a33d'];
++export const SAT_COLORS = ['#38a9ff', '#29d7d0', '#ffb83f'];
+ const colorOf = (sat) => SAT_COLORS[(sat - 1) % SAT_COLORS.length];
+ const SERIES_COLORS = SAT_COLORS;
+ 
+@@ -12,8 +12,14 @@ const HERO = {
+     orbit: [
+         { field: 'sma', file: 'orbit', name: '轨道高度', unit: 'km', sub: true },
+         { field: 'speed', file: 'orbit', name: '速度', unit: 'km/s' },
+-        { field: 'range', file: 'ground_obs', name: '站心斜距', unit: 'km' },
++        { field: 'R', file: 'formation_rtn', name: '径向相对位置', unit: 'km' },
++        { field: 'T', file: 'formation_rtn', name: '沿迹相对位置', unit: 'km' },
++    ],
++    ground: [
++        { field: 'az', file: 'ground_obs', name: '方位角', unit: '°' },
+         { field: 'el', file: 'ground_obs', name: '仰角', unit: '°' },
++        { field: 'range', file: 'ground_obs', name: '站心斜距', unit: 'km' },
++        { field: 'sun_alt', file: 'ground_obs', name: '目标区太阳高度', unit: '°' },
+     ],
+     attitude: [
+         { field: 'att_mode', file: 'attitude', name: '姿态模式', unit: '' },
+@@ -34,20 +40,24 @@ const HERO = {
+         { field: 'over_limit_count', file: 'thermal', name: '超限节点数', unit: '个' },
+     ],
+ };
++// 徽标按语义归属：地平线可见性只在编队总览与地面观察出现（指令 2.4）
+ const BADGES = [
+     { field: 'stable', file: 'attitude', name: '稳定', bool: true },
+-    { field: 'visible', file: 'ground_obs', name: '单星可见', bool: true },
+-    { field: 'common_vis', file: 'ground_obs', name: '共同可见', bool: true },
+-    { field: 'plan_strobe', file: 'display', name: '计划点亮', bool: true },
+-    { field: 'actual_strobe', file: 'display', name: '实际点亮', bool: true },
++    { field: 'visible', file: 'ground_obs', name: '单星可见', bool: true, only: ['formation', 'ground'] },
++    { field: 'common_vis', file: 'ground_obs', name: '共同可见', bool: true, only: ['formation', 'ground'] },
++    { field: 'plan_strobe', file: 'display', name: '计划点亮', bool: true, only: ['formation', 'ground'] },
++    { field: 'actual_strobe', file: 'display', name: '实际点亮', bool: true, only: ['formation', 'ground'] },
+ ];
+-// 表2-1 八组按语义归到四个标签，全参数仍可查，不因改版丢验收项
++// 表2-1 八组 + 两个派生组按语义归到标签（指令 2.3）：
++// 轨道页只放轨道量，地面站方位/仰角/斜距与显示任务量归地面观察页，
++// 太阳入射角与受照情况归姿态页，能源/热控各管各的。
+ const TAB_GROUPS = {
+-    orbit: ['①', '②'],
+-    attitude: ['③', '④', '⑤'],
++    orbit: ['①', '⑨'],
++    attitude: ['③', '⑩'],
+     power: ['⑥'],
+     thermal: ['⑦'],
+     formation: ['⑧'],
++    ground: ['②', '④', '⑤'],
+ };
+ const EDGE_FIELDS = ['edge_12', 'edge_23', 'edge_31'];
+ const EDGE_LABEL = { edge_12: '1-2', edge_23: '2-3', edge_31: '3-1' };
+@@ -77,28 +87,42 @@ let hooks = {};
+ const key = (file, field) => `${file}.${field}`;
+ const isNotComputed = (file, field) => (cfg.display.notComputed || []).includes(key(file, field));
+ 
+-// ── 取值与四态：未接入 / 尚未计算 / 暂不可用 / 数据异常 ──
+-function read(file, field, sat, epoch, scale) {
+-    if (missing.has(file) || !entries[file]) return { kind: 'notConnected', text: '未接入' };
+-    if (isNotComputed(file, field)) return { kind: 'na', text: '尚未计算' };
+-    const raw = getValue(entries[file], epoch, sat, field);
+-    if (raw === null || raw === undefined || raw === '') return { kind: 'na', text: '暂不可用' };
++// ── 取值与状态类别（V0.3 §12）─────────────────────────
++// kind 是结构化状态，界面文案与图表/导出层都按它分支，不靠中文文本猜。
++//   notConnected   数据源没接上
++//   notCalculated  列在，但模型没算（notComputed 名单）
++//   missingField   数据源里根本没有这一列 —— 属接口缺口，要回到生成侧补
++//   emptyValue     列在、也该有值，但该历元为空
++//   bad            有值但不是合法数字
++//   num / text     正常值
++function read(file, field, sat, epoch, scale, local) {
++    const e = entries[file];
++    if (!e || missing.has(file)) return { kind: 'notConnected', text: '未接入' };
++    if (isNotComputed(file, field)) return { kind: 'notCalculated', text: '尚未计算' };
++    if (!hasField(e, field)) return { kind: 'missingField', text: '字段未提供' };
++    // 二进制列是 1 s 一个历元；preview 只有 60 s 间隔，必须先把「仿真秒」换算成
++    // 该数据源自己的行号，否则 T+12:00:00 会去读第 43200 行（不存在）而 T+00:05:00
++    // 会读到 rel_s=18000 的值——那是 60 倍的时间错位。
++    const raw = getValue(e, (local || e.binary) ? epoch : epFor(e, epoch), sat, field);
++    if (raw === null || raw === undefined || raw === '') return { kind: 'emptyValue', text: '暂无数据' };
+     if (/^-?\d+(\.\d+)?$/.test(raw)) {
+         const n = Number(raw) * (scale || 1);
+         return Number.isFinite(n) ? { kind: 'num', n, raw: Number(raw) } : { kind: 'bad', text: '数据异常' };
+     }
+     return { kind: 'text', text: raw };
+ }
++const isVoid = v => v.kind !== 'num' && v.kind !== 'text';
+ 
+ // 由若干列求和（用电功率 = 平台 + 载荷）；任一列缺值即整体不可得，不拿 0 顶
+ function sumOf(file, fields, sat, epoch) {
+-    let acc = 0, got = false;
++    let acc = 0, got = false, worst = null;
+     for (const f of fields) {
+         const v = read(file, f, sat, epoch, 1);
+-        if (v.kind !== 'num') continue;
+-        acc += v.n; got = true;
++        if (v.kind === 'num') { acc += v.n; got = true; }
++        else if (!worst || v.kind === 'missingField') worst = v;
+     }
+-    return got ? { kind: 'num', n: acc } : { kind: 'na', text: '暂不可用' };
++    if (got) return { kind: 'num', n: acc };
++    return worst || { kind: 'emptyValue', text: '暂无数据' };
+ }
+ 
+ function heroValue(h, sat, epoch) {
+@@ -112,16 +136,27 @@ function orbitAt(sat, epoch, field) {
+     const rows = hooks.orbitAt ? hooks.orbitAt(epoch) : null;
+     if (!rows) return { kind: 'notConnected', text: '未接入' };
+     const r = rows[sat - 1];
+-    if (!r) return { kind: 'na', text: '暂不可用' };
++    if (!r) return { kind: 'emptyValue', text: '暂无数据' };
+     const n = field === 'sma' ? r.a - 6378.137 : Math.hypot(r.Vx, r.Vy, r.Vz);
+-    return Number.isFinite(n) ? { kind: 'num', n } : { kind: 'na', text: '暂不可用' };
++    return Number.isFinite(n) ? { kind: 'num', n } : { kind: 'bad', text: '数据异常' };
+ }
+ 
+ function fmt(v) {
++    if (v === 0) return '0';
++    if (Number.isInteger(v) && Math.abs(v) <= 1) return String(v);   // 0/1 标志不写成 1.00
++    if (Math.abs(v) < 0.01) return v.toPrecision(3);                 // 偏心率这类小量别糊成 0.00
+     const dp = Math.abs(v) >= 10000 ? 0 : Math.abs(v) >= 1000 ? 1 : 2;
+     return v.toFixed(dp);
+ }
+ 
++// 图例里如实报出越限比例。越限是数据事实（自由漂移构型），不能靠放宽阈值掩盖。
++const outText = (series) => {
++    const r = series.map(x => x.outRatio).filter(v => typeof v === 'number');
++    if (!r.length) return '';
++    const m = Math.max(...r);
++    return m > 0 ? ` · 实测越限 ${(m * 100).toFixed(1)}% 采样点` : ' · 全程在带内';
++};
++
+ function cell(v) {
+     if (v.kind === 'num') return { text: fmt(v.n), cls: '' };
+     if (v.kind === 'text') return { text: v.text, cls: '' };
+@@ -201,14 +236,25 @@ export function setTab(tab) {
+         b.setAttribute('aria-selected', String(on));
+     });
+     const satPane = tab !== 'formation' && tab !== 'ground';
++    $('selStrip').hidden = tab === 'formation';
+     $('tabFormation').hidden = tab !== 'formation';
+     $('tabGround').hidden = tab !== 'ground';
+     $('tabSat').hidden = !satPane;
++    syncChartVisibility();
+     render(hooks.simSeconds ? hooks.simSeconds() : 0);
+ }
+ 
+ export function getTab() { return activeTab; }
+ export function getView() { return activeView; }
++// 验收自证：每张图实际用到的坐标窗、每条线的带与采样点数（只读）
++export function chartDiag() {
++    const o = {};
++    for (const [id, c] of Object.entries(charts)) {
++        o[id] = { hidden: !!c.host.hidden, mounted: !!c.host.chart, empty: !!c.host._empty,
++                  diag: c.host.chart ? c.host.chart.diag() : null };
++    }
++    return o;
++}
+ 
+ // ── 右栏：选中目标大字区 ───────────────────────────
+ function renderHero(epoch) {
+@@ -231,7 +277,8 @@ function shadowBadge(epoch, sat) {
+     const mg = read('sun_eclipse', 'umbra_margin_km', sat, epoch, 1);
+     const pf = read('sun_eclipse', 'array_proj_factor', sat, epoch, 1);
+     const i = Math.round(st.raw);
+-    const cls = i === 0 ? 'ok' : i === 1 ? 'warn' : 'bad';
++    // 日照=正常，半影=需注意，本影只是轨道上的正常状态之一，不给它「错误红」
++    const cls = i === 0 ? 'ok' : i === 1 ? 'warn' : 'ecl';
+     const pct = ratio.kind === 'num' ? Math.round(ratio.n * 100) + '%' : '—';
+     const sepTxt = sep.kind === 'num' ? sep.n.toFixed(2) + '°' : '—';
+     // 本影裕度 = 地心到「卫星—太阳」连线的垂距 − 地球半径，正数即地球遮不住日面。
+@@ -250,7 +297,8 @@ function lightWord(v) {
+ }
+ 
+ function renderBadges(epoch) {
+-    $('badges').innerHTML = shadowBadge(epoch, selectedSat) + BADGES.map(b => {
++    $('badges').innerHTML = shadowBadge(epoch, selectedSat) + BADGES
++        .filter(b => !b.only || b.only.includes(activeTab)).map(b => {
+         const v = read(b.file, b.field, selectedSat, epoch, 1);
+         if (b.bool && v.kind === 'num') {
+             return `<span class="tag ${v.raw === 1 ? 'ok' : 'na'}"><i></i>${b.name} ${v.raw === 1 ? '是' : '否'}</span>`;
+@@ -274,59 +322,71 @@ function nextWindow(simSeconds) {
+ function renderFormation(epoch, simSeconds) {
+     const d = cfg.display;
+     const edges = EDGE_FIELDS.map(f => read('formation_geom', f, 1, epoch, 1000));
+-    const nums = edges.filter(e => e.kind === 'num').map(e => e.n);
+-    const avg = nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : null;
+-    const devs = edges.filter(e => e.kind === 'num')
+-        .map((e, i) => Math.abs(e.n - (nominal['formation_geom.' + EDGE_FIELDS[i]] || 1000)));
++    // 平均星间距按数据本身的单位（km）算；上面那路 1000 倍只服务「偏差/m」那一格
++    const kmNums = EDGE_FIELDS.map(f => read('formation_geom', f, 1, epoch, 1))
++        .filter(e => e.kind === 'num').map(e => e.n);
++    const avg = kmNums.length ? kmNums.reduce((a, b) => a + b, 0) / kmNums.length : null;
++    // 逐条边对「自己那条边的初始值」比；某条读不到就跳过它，不拿 1000 兜底
++    const devs = edges.map((v, i) => {
++        const nom = nominal['formation_geom.' + EDGE_FIELDS[i]];
++        return v.kind === 'num' && Number.isFinite(nom) ? Math.abs(v.n - nom) : null;
++    }).filter(Number.isFinite);
+     const worst = devs.length ? Math.max(...devs) : null;
+     const online = sats.filter(s => {
+         const v = read('ground_obs', 'visible', s, epoch, 1);
+         return v.kind === 'num' && v.raw === 1;
+     }).length;
+     $('formationHero').innerHTML = [
+-        ['三颗卫星', `${online} / ${sats.length} 可见`, online === sats.length ? 'ok' : ''],
+-        ['星间距离（平均）', avg === null ? '暂不可用' : avg.toFixed(1) + ' km', avg === null ? 'na' : ''],
+-        ['构型偏差', worst === null ? '暂不可用' : worst.toFixed(1) + ' m',
++        ['可见卫星', `${online} / ${sats.length}`, online === sats.length ? 'ok' : ''],
++        ['平均星间距', avg === null ? '暂无数据' : avg.toFixed(3) + ' km', avg === null ? 'na' : ''],
++        ['构型偏差', worst === null ? '暂无数据' : worst.toFixed(1) + ' m',
+             worst === null ? 'na' : (worst > d.edgeToleranceM ? 'bad' : 'ok')],
+-        ['当前时刻', 'T+' + hms(simSeconds), ''],
++        ['当前仿真时刻', 'T+' + hms(simSeconds), ''],
+     ].map(([k, v, cls]) => `<div class="cell"><div class="k">${k}</div>` +
+         `<div class="v ${cls || ''}" style="font-size:${String(v).length > 9 ? 16 : 24}px">${v}</div></div>`).join('');
+     $('kvFormationTag').textContent = worst === null ? '' : `允许 ±${d.edgeToleranceM} m`;
+ 
+     const rows = [
+-        ['光照状态', s => lightWord(read('sun_eclipse', 'shadow_state', s, epoch, 1))],
++        ['光照状态', s => { const v = read('sun_eclipse', 'shadow_state', s, epoch, 1);
++            return isVoid(v) ? v : { text: lightWord(v), kind: 'text' }; }],
+         ['电池 SOC', s => { const v = read('power', 'battery_soc_pct', s, epoch, 1);
+-                            return v.kind === 'num' ? v.n.toFixed(0) + ' %' : v.text; }],
++            return isVoid(v) ? v : { text: v.n.toFixed(0) + ' %', kind: 'num' }; }],
+         ['发电功率', s => { const v = read('power', 'gen_power', s, epoch, 1);
+-                            return v.kind === 'num' ? v.n.toFixed(0) + ' W' : v.text; }],
++            return isVoid(v) ? v : { text: v.n.toFixed(0) + ' W', kind: 'num' }; }],
+         ['用电功率', s => { const v = sumOf('power', ['platform_power', 'payload_power'], s, epoch);
+-                            return v.kind === 'num' ? v.n.toFixed(0) + ' W' : v.text; }],
++            return isVoid(v) ? v : { text: v.n.toFixed(0) + ' W', kind: 'num' }; }],
+         ['关键温度', s => { const v = read('thermal', 'temp_main', s, epoch, 1);
+-                            return v.kind === 'num' ? v.n.toFixed(1) + ' ℃' : v.text; }],
++            return isVoid(v) ? v : { text: v.n.toFixed(1) + ' ℃', kind: 'num' }; }],
+     ];
+-    // 星间距离是编队量，列在三颗星的格子里会重复三遍，单独一行放在对比表下方
+-    const edgeLine = EDGE_FIELDS.map(f => {
+-        const v = read('formation_geom', f, 1, epoch, 1000);
+-        return `${EDGE_LABEL[f]} ${v.kind === 'num' ? v.n.toFixed(2) : '—'}`;
+-    }).join(' · ');
+     const head = `<tr><th>指标</th>${sats.map(s =>
+         `<th style="--satc:${colorOf(s)}">TM0S${s}</th>`).join('')}</tr>`;
+     $('cmpBody').innerHTML = `<table>${head}` + rows.map(([name, fn]) => {
+         const cells = sats.map(s => fn(s));
+-        const na = cells.every(c => /未|暂|—/.test(c));
+-        const cls = na ? 'na' : (/不可见|本影|异常/.test(cells.join('')) ? 'bad' : '');
+-        return `<tr><td>${name}</td>${cells.map(c => `<td class="${cls}">${c}</td>`).join('')}</tr>`;
+-    }).join('') +
+-        `<tr><td>星间距离 km</td><td colspan="${sats.length}" style="text-align:left">${edgeLine}</td></tr>` +
+-        `</table>`;
+-    $('cmpSatNote').textContent = '无数据的项显示"未计算"，不以 0 代替';
++        const allVoid = cells.every(c => isVoid(c));
++        // 状态色只看结构化 kind。光照=本影 是正常读数，绝不能再按文本正则涂红。
++        const rowCls = allVoid ? 'na' : (cells.some(c => c.kind === 'bad') ? 'bad' : '');
++        return `<tr><td>${name}</td>${cells.map(c =>
++            `<td class="${rowCls || (isVoid(c) ? 'na' : '')}">${c.text}</td>`).join('')}</tr>`;
++    }).join('') + `</table>`;
++    $('cmpSatNote').textContent = '缺值按类别显示，不以 0 代替';
++
++    // 三组星间距离各占一行（V0.3 §6.1 组件4）；数据本身就是 km，不做无依据换算
++    const EDGE_NAME = { edge_12: 'TM0S1–TM0S2', edge_23: 'TM0S2–TM0S3', edge_31: 'TM0S3–TM0S1' };
++    $('edgeRows').innerHTML = `<table><tr><th>星间连线</th><th>距离 (km)</th></tr>` + EDGE_FIELDS.map(f => {
++        const v = read('formation_geom', f, 1, epoch, 1);
++        return `<tr><td>${EDGE_NAME[f]}</td><td class="${isVoid(v) ? 'na' : ''}">` +
++               `${isVoid(v) ? v.text : v.n.toFixed(3)}</td></tr>`;
++    }).join('') + `</table>`;
++    $('edgeNote').textContent = '来源 formation_geom，单位 km';
+ }
+ 
+ function renderMission(epoch, simSeconds) {
+     const d = cfg.display;
+     const edges = EDGE_FIELDS.map(f => read('formation_geom', f, 1, epoch, 1000));
+-    const devs = edges.filter(e => e.kind === 'num')
+-        .map((e, i) => Math.abs(e.n - (nominal['formation_geom.' + EDGE_FIELDS[i]] || 1000)));
++    const devs = edges.map((v, i) => {
++        const nom = nominal['formation_geom.' + EDGE_FIELDS[i]];
++        return v.kind === 'num' && Number.isFinite(nom) ? Math.abs(v.n - nom) : null;
++    }).filter(Number.isFinite);
+     const worst = devs.length ? Math.max(...devs) : null;
+     const cv = read('ground_obs', 'common_vis', selectedSat, epoch, 1);
+     const lag = Math.max(lagOf('ground_obs', simSeconds), lagOf('formation_geom', simSeconds));
+@@ -361,7 +421,9 @@ function renderTable(epoch) {
+                    `<td class="val ${c.cls}">${c.text}</td><td class="unit">${row.unit || ''}</td></tr>`;
+         }).join('')).join('');
+     const cur = groupsOf(activeTab);
+-    pane.innerHTML = cur.length ? `<table class="ptable"><tbody>${block(cur)}</tbody></table>` : '';
++    const html = cur.length ? `<table class="ptable"><tbody>${block(cur)}</tbody></table>` : '';
++    pane.innerHTML = activeTab === 'ground' ? '' : html;
++    $('paneGround').innerHTML = activeTab === 'ground' ? html : '';
+     for (const g of cfg.groups) {
+         const out = g.panel === 'telemetry' ? tele : main;
+         out.insertAdjacentHTML('beforeend', block([g]));
+@@ -377,7 +439,8 @@ function renderGround(epoch) {
+         const el = read('ground_obs', 'el', s, epoch, 1);
+         const rg = read('ground_obs', 'range', s, epoch, 1);
+         const above = el.kind === 'num' ? (el.n >= 0 ? '地平以上' : '地平以下') : el.text;
+-        return `<tr><td>TM0S${s}</td>` +
++        return `<tr data-sat="${s}"${s === selectedSat ? ' class="sel"' : ''}>` +
++            `<td><i class="dot" style="background:${colorOf(s)}"></i>TM0S${s}</td>` +
+             `<td class="${az.kind === 'num' ? '' : 'na'}">${az.kind === 'num' ? az.n.toFixed(1) + '°' : az.text}</td>` +
+             `<td class="${el.kind === 'num' ? (el.n >= 0 ? 'ok' : '') : 'na'}">${el.kind === 'num' ? el.n.toFixed(1) + '°' : el.text}</td>` +
+             `<td class="${rg.kind === 'num' ? '' : 'na'}">${rg.kind === 'num' ? rg.n.toFixed(0) + ' km' : rg.text}</td>` +
+@@ -386,73 +449,113 @@ function renderGround(epoch) {
+     host.innerHTML = `<table><tr><th>目标</th><th>方位角</th><th>仰角</th><th>斜距</th><th>状态</th></tr>${rows}</table>`;
+ }
+ 
+-// ── 趋势图 ──────────────────────────────────────────
++// ── 趋势图：每个标签有自己的图表容器，切标签只换内容不动相机/时间/选星 ──
++function mountChart(host, spec) {
++    host.innerHTML = `<div class="ch-hd"><h3>${spec.title}（${spec.unit}）</h3><span class="sub"></span></div>` +
++        `<canvas></canvas><div class="legend"></div>`;
++    const cv = host.querySelector('canvas');
++    cv.setAttribute('role', 'img');
++    cv.setAttribute('aria-label', `${spec.title} 趋势图`);
++    cv.addEventListener('charthover', e => showTip(e.detail, spec));
++    cv.addEventListener('chartleave', hideTip);
++    host._empty = false;
++    host.chart = createChart(cv, { onPick: sec => hooks.onSeek && hooks.onSeek(sec) });
++}
++
++// 空态要说清是哪一类空、缺在哪，不画伪曲线，也不留一张空图让人以为坏了
++function renderEmpty(host, spec) {
++    if (host._empty) return;
++    host._empty = true; host.chart = null;
++    host.innerHTML = `<div class="ch-hd"><h3>${spec.title}（${spec.unit}）</h3></div>` +
++        `<div class="empty"><b>本场景没有可画的${spec.title}曲线</b>` +
++        `<span>${spec.emptyReason || '所选时间窗内该字段没有有效值。'}</span></div>`;
++}
++
+ function buildCharts() {
+     for (const spec of cfg.charts) {
+         const host = $(spec.id);
+         if (!host) continue;
+-        if ((cfg.display.notComputed || []).some(k => spec.series.some(s => k === `${spec.file}.${s.field}`))) {
+-            host.hidden = true;      // 全为未计算量的图不画，避免把恒 0 线当成完美保持
+-            continue;
+-        }
+-        host.innerHTML = `<div class="ch-hd"><h3>${spec.title}</h3><span class="sub"></span></div>` +
+-            `<canvas></canvas><div class="legend"></div>`;
+-        const cv = host.querySelector('canvas');
+-        cv.setAttribute('role', 'img');
+-        cv.setAttribute('aria-label', `${spec.title} 趋势图`);
+-        cv.addEventListener('charthover', e => showTip(e.detail, spec));
+-        cv.addEventListener('chartleave', hideTip);
+-        charts[spec.id] = { spec, host, cv, chart: createChart(cv, { onPick: sec => hooks.onSeek && hooks.onSeek(sec) }) };
++        charts[spec.id] = { spec, host };
+     }
++    syncChartVisibility();
+ }
+ 
+-function seriesFor(spec, epLo, epHi) {
++function syncChartVisibility() {
++    for (const { spec, host } of Object.values(charts)) {
++        host.hidden = spec.tab !== activeTab;
++        if (!host.hidden && !host.chart && !host._empty) mountChart(host, spec);
++    }
++}
++
++// 全局历元（1 s 步）→ 该数据源自己的行号
++function epFor(e, epoch) {
++    const st = stepOf(e);
++    return Math.max(0, Math.min(e.nEpoch - 1, Math.round(epoch * getStepSec() / st)));
++}
++
++// 每条曲线按自己数据源的采样间隔铺时间轴。orbit_itrf 只有 preview 的 60 s 间隔，
++// 沿用全局 1 s 会把曲线压成 1/60 长，还把游标指到没有数据的地方。
++function stepOf(e) {
++    if (!e || e.nEpoch < 2) return getStepSec();
++    const last = e.lastRelS;
++    return Number.isFinite(last) && last > 0 ? last / (e.nEpoch - 1) : getStepSec();
++}
++
++function seriesFor(spec, secLo, secHi) {
+     const e = entries[spec.file];
+     if (!e) return [];
+-    const stepSec = getStepSec();
+-    const stride = Math.max(1, Math.ceil((epHi - epLo) / 600));   // 1 秒数据抽到 ≤600 点，画得快也不糊
+-    // 三条边长按"组"上色而不是按星：一条边对应两颗星，用星色会误导
++    const st = stepOf(e);
++    const epLo = Math.max(0, Math.floor(secLo / st));
++    const epHi = Math.min(e.nEpoch - 1, Math.ceil(secHi / st));
++    if (epHi < epLo) return [];
++    const stride = Math.max(1, Math.ceil((epHi - epLo) / 600));   // 只降采样画法，不动底层数据与导出
++    const sat = spec.perSat ? selectedSat : 1;
++    const tol = spec.band === 'tolerance' ? cfg.display.edgeToleranceM : cfg.display.driftToleranceM;
+     return spec.series.map((s, i) => {
+         const data = [];
+         for (let ep = epLo; ep <= epHi; ep += stride) {
+-            const v = read(spec.file, s.field, spec.perSat ? selectedSat : 1, ep, spec.scale);
+-            if (v.kind === 'num') data.push({ x: ep * stepSec, y: v.n });
++            const v = s.sum ? sumOf(spec.file, s.sum, sat, ep)
++                            : read(spec.file, s.field, sat, ep, spec.scale, true);
++            if (v.kind === 'num') data.push({ x: ep * st, y: v.n + (spec.shift || 0) });
+         }
+-        return { name: s.name, color: s.color || SERIES_COLORS[i % SERIES_COLORS.length], data };
++        const nom = spec.bandFromNominal ? nominal[`${spec.file}.${s.field}`] : null;
++        return {
++            name: s.name, color: s.color || SERIES_COLORS[i % SERIES_COLORS.length], data,
++            // 标称带画在各条线自己的初始值上：三条边长的初始值本就不同
++            band: Number.isFinite(nom) ? { lo: nom - tol, hi: nom + tol } : undefined,
++        };
+     });
+ }
+ 
+ function renderCharts(simSeconds) {
+-    const stepSec = getStepSec();
+-    const nEpoch = Math.max(...Object.values(entries).map(e => e.nEpoch || 1));
+-    const epHi = Math.min(nEpoch - 1, Math.floor((simSeconds + 600) / stepSec));
+-    const epLo = Math.max(0, Math.floor((simSeconds - 3600) / stepSec));
+-    for (const { spec, chart, host } of Object.values(charts)) {
++    const secLo = Math.max(0, simSeconds - 3600), secHi = simSeconds + 600;
++    for (const { spec, host } of Object.values(charts)) {
+         if (host.hidden) continue;
++        const e = entries[spec.file];
++        const series = seriesFor(spec, secLo, secHi);
++        if (!series.some(s => s.data.length)) { renderEmpty(host, spec); continue; }
++        if (!host.chart) mountChart(host, spec);
+         const d = cfg.display;
+         const opts = { cursor: simSeconds };
+-        if (spec.bandFromNominal) {
+-            const nom = nominal[`${spec.file}.${spec.series[0].field}`];
+-            if (nom) {
+-                const tol = spec.band === 'tolerance' ? d.edgeToleranceM : d.driftToleranceM;
+-                opts.band = { lo: nom - tol, hi: nom + tol };
+-                opts.plan = { y: nom };
+-            }
+-        } else if (spec.band) opts.band = { lo: spec.band[0], hi: spec.band[1] };
++        if (spec.bandFromNominal) opts.band = null;   // 允许带已经挂在每条 series 上
++        else if (spec.band) opts.band = { lo: spec.band[0], hi: spec.band[1] };
+         if (spec.plan != null) opts.plan = { y: spec.plan };
+         if (spec.gate && d.sunAltGate.enabled) opts.plan = { y: d.sunAltGate.thresholdDeg };
+-        chart.setData(seriesFor(spec, epLo, epHi), opts);
++        host.chart.setData(series, opts);
++        const ep = Math.floor(simSeconds / stepOf(e));
+         host.querySelector('.legend').innerHTML = spec.series.map((s, i) => {
+-            const v = read(spec.file, s.field, spec.perSat ? selectedSat : 1,
+-                Math.floor(simSeconds / stepSec), spec.scale);
++            const v = s.sum ? sumOf(spec.file, s.sum, spec.perSat ? selectedSat : 1, ep)
++                            : read(spec.file, s.field, spec.perSat ? selectedSat : 1, ep, spec.scale, true);
+             return `<span style="color:${s.color || SERIES_COLORS[i % SERIES_COLORS.length]}"><i></i>${s.name} ` +
+-                   `<b>${v.kind === 'num' ? fmt(v.n) : '—'}</b></span>`;
++                   `<b>${v.kind === 'num' ? fmt(v.n + (spec.shift || 0)) : '—'}</b>${outText([series[i]])}</span>`;
+         }).join('') + [
+             opts.plan ? `<span style="color:var(--plan)"><i class="dash"></i>${spec.planLabel || '标称'} ${fmt(opts.plan.y)}</span>` : '',
+-            opts.band ? `<span style="color:var(--bad)"><i></i>${spec.bandLabel || `允许 ±${d.edgeToleranceM} m`}</span>` : '',
+-            spec.gate && !cfg.display.sunAltGate.enabled ? '<span style="color:var(--dim)">天黑门限（当前关闭）</span>' : '',
++            series.some(s => s.band) ? `<span style="color:var(--bad)"><i></i>${spec.bandLabel || `允许 ±${d.edgeToleranceM} m`}</span>` : '',
++            spec.gate && !d.sunAltGate.enabled ? '<span style="color:var(--dim)">天黑门限（当前关闭）</span>' : '',
+         ].join('');
+-        host.querySelector('.sub').textContent = '前 1 小时 · 点击定位';
++        host.querySelector('.sub').textContent = '前 1 小时 · 点击定位' +
++            (e.binary ? '' : ` · 数据源 preview，采样 ${stepOf(e).toFixed(0)} s`);
++        if (spec.note) host.querySelector('.sub').title = spec.note;
+     }
+ }
+ 
+@@ -480,7 +583,8 @@ function runsOf(file, field, cls) {
+     return out;
+ }
+ 
+-// 事件表按真实时刻单点显示（不插值），换算成相对秒后标在时间轴上
++// 事件表按真实时刻单点显示（不插值），换算成相对秒后标在时间轴上。
++// 带上 sat_id：只有具体某一颗星的事件才允许顺带选中，ALL 不能随便选星。
+ function eventMarks() {
+     const e = entries.events;
+     if (!e || !t0ms) return [];
+@@ -490,9 +594,12 @@ function eventMarks() {
+         .map(r => {
+             const sec = (Date.parse((r.t_actual || '').replace(' ', 'T') + 'Z') - t0ms) / 1000;
+             if (!Number.isFinite(sec) || sec < 0 || sec > spanSec) return null;
++            const m = /^TM0S(\d+)$/.exec(r.sat_id || '');
+             return { from: sec, to: sec + (Number(r.duration_s) || 0), cls: EVENT_CLASS(r.category),
++                     sat: m ? Number(m[1]) : null, label: r.category,
+                      tip: `事件「${r.category}」${r.sat_id} T+${hms(sec)}` +
+-                          `${r.duration_s ? ` 起 ${Math.round(r.duration_s)} s` : ''}${r.reason ? `（${r.reason}）` : ''}` };
++                          `${r.duration_s ? ` 起 ${Math.round(r.duration_s)} s` : ''}${r.reason ? `（${r.reason}）` : ''}` +
++                          ` · 点击跳转到该时刻` };
+         }).filter(Boolean);
+ }
+ 
+@@ -512,7 +619,8 @@ function paintWindows() {
+              ...eventMarks()];
+     const ev = $('tlEvents');
+     if (ev) ev.innerHTML = eventMarks().map(m =>
+-        `<div class="ev ${m.cls}" style="left:${m.from / spanSec * 100}%" title="${m.tip}"></div>`).join('');
++        `<div class="ev ${m.cls}" style="left:${m.from / spanSec * 100}%" data-sec="${m.from.toFixed(0)}"` +
++        `${m.sat ? ` data-sat="${m.sat}"` : ''} title="${m.tip}"></div>`).join('');
+     const legend = $('bandLegend');
+     if (legend) {
+         const kinds = [...new Set(runs.map(r => r.cls))];
+@@ -561,7 +669,7 @@ export function scenarioSnapshot() {
+         视图: activeView, 标签: activeTab,
+     };
+ }
+-export function exportRows(sat) {
++export function exportRows(sat, epLo = 0, epHi = null) {
+     // 只导当前数据里真有值的列；空值保持空，不写 0
+     const stepSec = getStepSec();
+     const cols = [];
+@@ -576,16 +684,24 @@ export function exportRows(sat) {
+         const e = entries[file];
+         if (!e || missing.has(file)) continue;
+         for (const f of fields) {
+-            const probe = [0, Math.floor(e.nEpoch / 2)].some(ep => {
++            // 在区间内等距抽 64 个历元判断该列是否真有值；整列为空的列不导出，
++            // 也不写 0。抽稀只影响「要不要这一列」，不改任何数值。
++            const hi = epHi == null ? e.nEpoch - 1 : Math.min(epHi, e.nEpoch - 1);
++            const lo = Math.max(0, Math.min(epLo, hi));
++            let any = false;
++            for (let t = 0; t < 64 && !any; t++) {
++                const ep = lo + Math.round((hi - lo) * t / 63);
+                 const v = getValue(e, ep, sat, f);
+-                return v !== null && v !== undefined && v !== '';
+-            });
+-            if (probe) cols.push({ file, f });
++                if (v !== null && v !== undefined && v !== '') any = true;
++            }
++            if (any) cols.push({ file, f });
+         }
+     }
++    const hi = epHi == null ? entries.ground_obs.nEpoch - 1 : Math.min(epHi, entries.ground_obs.nEpoch - 1);
++    const lo = Math.max(0, Math.min(epLo, hi));
+     const head = ['rel_s', 'utcg', ...cols.map(c => `${c.file}.${c.f}`)];
+     const lines = [head.join(',')];
+-    for (let ep = 0; ep < entries.ground_obs.nEpoch; ep++) {
++    for (let ep = lo; ep <= hi; ep++) {
+         const row = [ep * stepSec, getValue(entries.ground_obs, ep, sat, 'utcg') ?? ''];
+         for (const c of cols) { const v = getValue(entries[c.file], ep, sat, c.f); row.push(v === null || v === undefined ? '' : v); }
+         lines.push(row.join(','));
+@@ -600,9 +716,9 @@ export function render(simSeconds) {
+     const epoch = Math.max(0, Math.min(Math.floor(simSeconds / stepSec), (entries.ground_obs?.nEpoch || 1) - 1));
+     if (activeView === 'formation') renderFormation(epoch, simSeconds);
+     if (activeTab === 'ground' || activeView === 'ground') renderGround(epoch);
+-    if (['orbit', 'attitude', 'power', 'thermal'].includes(activeTab)) {
+-        renderHero(epoch); renderBadges(epoch); renderTable(epoch);
+-    }
++    if (activeTab !== 'formation') { renderHero(epoch); renderBadges(epoch); }
++    // 地面观察页也要出 ②④⑤ 组的行（宿主是 #paneGround，不在单星页里）
++    if (activeTab !== 'formation') renderTable(epoch);
+     renderMission(epoch, simSeconds);
+     renderCharts(simSeconds);
+     [...$('tgtList').children].forEach(card => {
+@@ -613,13 +729,14 @@ export function render(simSeconds) {
+             el.className = cls || '';
+         };
+         const vis = read('ground_obs', 'visible', sat, epoch, 1);
+-        put('st', vis.kind === 'num' ? (vis.raw === 1 ? '可见' : '不可见') : vis.text,
++        // visible 的真实语义是「仰角达标」，属于站心地平概念，就别写成含混的「可见」
++        put('st', vis.kind === 'num' ? (vis.raw === 1 ? '地平以上' : '地平以下') : vis.text,
+             vis.kind === 'num' ? (vis.raw === 1 ? 'st' : 'st na') : 'st na');
+         put('light', lightWord(read('sun_eclipse', 'shadow_state', sat, epoch, 1)));
+         const soc = read('power', 'battery_soc_pct', sat, epoch, 1);
+-        put('soc', soc.kind === 'num' ? soc.n.toFixed(0) + '%' : '未计算');
++        put('soc', soc.kind === 'num' ? soc.n.toFixed(0) + '%' : soc.text);
+         const tp = read('thermal', 'temp_main', sat, epoch, 1);
+-        put('temp', tp.kind === 'num' ? tp.n.toFixed(1) + '℃' : '未计算');
++        put('temp', tp.kind === 'num' ? tp.n.toFixed(1) + '℃' : tp.text);
+         const el = read('ground_obs', 'el', sat, epoch, 1);
+         const rg = read('ground_obs', 'range', sat, epoch, 1);
+         put('el', el.kind === 'num' ? el.n.toFixed(1) : '—');
+@@ -637,8 +754,8 @@ export async function initPanels(displayJson, h) {
+     const files = new Set();
+     cfg.groups.forEach(g => g.rows.forEach(r => files.add(r.file)));
+     (displayJson.charts || []).forEach(c => files.add(c.file));
+-    ['ground_obs', 'display', 'events', 'time_ident', 'sun_eclipse', 'formation_geom', 'power', 'thermal']
+-        .forEach(f => files.add(f));
++    ['ground_obs', 'display', 'events', 'time_ident', 'sun_eclipse', 'formation_geom',
++     'formation_rtn', 'power', 'thermal'].forEach(f => files.add(f));
+     for (const f of files) {
+         try { entries[f] = await loadCategory(f); } catch (e) { missing.add(f); }
+     }
+@@ -655,6 +772,11 @@ export async function initPanels(displayJson, h) {
+         const b = e.target.closest('button[data-tab]');
+         if (b) setTab(b.dataset.tab);
+     });
++    // 点地面观察表里的某一行 = 选中那颗星，天空视图与右栏一起跟着走
++    $('groundBody').addEventListener('click', (e) => {
++        const tr = e.target.closest('tr[data-sat]');
++        if (tr) selectSat(Number(tr.dataset.sat));
++    });
+     cfg.station = hooks.station ? hooks.station() : null;
+     buildTargets();
+     buildCharts();

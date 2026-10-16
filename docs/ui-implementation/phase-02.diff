@@ -1,0 +1,494 @@
+diff --git a/sim/config/display.json b/sim/config/display.json
+index 5b17318..1db4293 100644
+--- a/sim/config/display.json
++++ b/sim/config/display.json
+@@ -12,61 +12,81 @@
+   "charts": [
+     {
+       "id": "chEdge",
++      "tab": "formation",
+       "title": "编队边长",
+       "file": "formation_geom",
+       "unit": "m",
+       "scale": 1000,
+       "series": [
+-        {
+-          "field": "edge_12",
+-          "name": "S1–S2"
+-        },
+-        {
+-          "field": "edge_23",
+-          "name": "S2–S3"
+-        },
+-        {
+-          "field": "edge_31",
+-          "name": "S3–S1"
+-        }
++        { "field": "edge_12", "name": "TM0S1–TM0S2" },
++        { "field": "edge_23", "name": "TM0S2–TM0S3" },
++        { "field": "edge_31", "name": "TM0S3–TM0S1" }
+       ],
+       "planLabel": "标称（初始）",
+       "bandLabel": "允许 ±10 m（对初始构型）",
+       "bandFromNominal": true,
+-      "band": "tolerance"
++      "band": "tolerance",
++      "note": "本数据集运行工况为 FreeDrift-Synthetic（自由漂移），三条边长对初始值的偏离本就远超 ±10 m，图上如实标出越限区段，不放宽阈值。"
+     },
+     {
+-      "id": "chDrift",
+-      "title": "参考中心漂移（RTN）",
+-      "file": "formation_geom",
+-      "unit": "m",
+-      "scale": 1000,
++      "id": "chOrbit",
++      "tab": "orbit",
++      "title": "轨道高度",
++      "file": "orbit_itrf",
++      "field": "sma",
++      "shift": -6378.137,
++      "unit": "km",
++      "perSat": true,
++      "series": [
++        { "field": "sma", "name": "轨道高度（a − 地球半径）" }
++      ]
++    },
++    {
++      "id": "chAttitude",
++      "tab": "attitude",
++      "title": "太阳入射角",
++      "file": "sun_eclipse",
++      "unit": "°",
++      "perSat": true,
+       "series": [
+-        {
+-          "field": "drift_R",
+-          "name": "R 径向"
+-        },
+-        {
+-          "field": "drift_T",
+-          "name": "T 沿迹"
+-        },
+-        {
+-          "field": "drift_N",
+-          "name": "N 法向"
+-        }
++        { "field": "incidence_deg", "name": "对载荷轴 +Z_B" },
++        { "field": "array_incidence_deg", "name": "对太阳翼法向" }
+       ]
+     },
++    {
++      "id": "chPower",
++      "tab": "power",
++      "title": "发电功率与用电功率",
++      "file": "power",
++      "unit": "W",
++      "perSat": true,
++      "series": [
++        { "field": "gen_power", "name": "发电功率" },
++        { "sum": ["platform_power", "payload_power"], "name": "用电功率（平台 + 载荷）" }
++      ],
++      "emptyReason": "当前结果未包含能源时序：power 的 gen_power / platform_power / payload_power 整列为空，battery_soc_pct 字段未提供。"
++    },
++    {
++      "id": "chThermal",
++      "tab": "thermal",
++      "title": "温度测点",
++      "file": "thermal",
++      "unit": "℃",
++      "perSat": true,
++      "series": [
++        { "field": "temp_main", "name": "temp_main" }
++      ],
++      "emptyReason": "当前结果未包含温度时序：thermal 的 temp_main 整列为空，且接口定义的逐测点 temp_<node> 列尚未交付。"
++    },
+     {
+       "id": "chSun",
++      "tab": "ground",
+       "title": "目标区太阳高度（合肥）",
+       "file": "ground_obs",
+       "unit": "°",
+-      "scale": 1,
++      "perSat": false,
+       "series": [
+-        {
+-          "field": "sun_alt",
+-          "name": "太阳高度"
+-        }
++        { "field": "sun_alt", "name": "太阳高度" }
+       ],
+       "gate": true,
+       "gateLabel": "天黑门限 −6°（默认不参与判定）"
+@@ -80,8 +100,5 @@
+     "formation_geom.drift_N"
+   ],
+   "notComputedNote": "effective/incone 取决于显示载荷真实指向；drift_* 因参考中心逐秒列未交付、当前用三星几何中心代替，恒为 0",
+-  "timelineEventSkip": [
+-    "点亮",
+-    "熄灭"
+-  ]
++  "timelineEventSkip": ["点亮", "熄灭"]
+ }
+
+diff --git a/sim/js/chart.js b/sim/js/chart.js
+index b2458b0..c0d6c18 100644
+--- a/sim/js/chart.js
++++ b/sim/js/chart.js
+@@ -76,11 +76,24 @@ export function createChart(canvas, { fmtY = v => Math.round(v * 10) / 10, onPic
+             ctx.stroke();
+             ctx.setLineDash([]);
+             if (opts.band) {
+-                ctx.fillStyle = '#d8604b';
+-                s.data.forEach(p => {
+-                    if (p.y >= opts.band.lo && p.y <= opts.band.hi) return;
+-                    ctx.beginPath(); ctx.arc(px(p.x), py(p.y), 2.2, 0, Math.PI * 2); ctx.fill();
+-                });
++                // 越限怎么画。本数据集是自由漂移（mode=FreeDrift-Synthetic），三条边长对初始
++                // 构型的偏离本就远超 ±10 m，实测约 89.5% 的采样点在带外，而且逐点在带内外来回
++                // 穿越——逐点画圆、按段描红、按段填色都会糊成锯齿。
++                // 这里只保留：允许带本身 + 三条线 + 每条线一个最大越限点标记，
++                // 越限比例交给图例用数字说清。阈值与标称值一个字节都不改。
++                let worst = null;
++                for (const q of s.data) {
++                    if (q.y >= opts.band.lo && q.y <= opts.band.hi) continue;
++                    const d = q.y > opts.band.hi ? q.y - opts.band.hi : opts.band.lo - q.y;
++                    if (!worst || d > worst.d) worst = { d, q };
++                }
++                s.outRatio = s.data.length
++                    ? s.data.filter(q => q.y < opts.band.lo || q.y > opts.band.hi).length / s.data.length
++                    : 0;
++                if (worst) {
++                    ctx.fillStyle = '#d8604b';
++                    ctx.beginPath(); ctx.arc(px(worst.q.x), py(worst.q.y), 3, 0, Math.PI * 2); ctx.fill();
++                }
+             }
+         });
+         // 当前时刻游标
+
+diff --git a/sim/js/loader.js b/sim/js/loader.js
+index c3cb3b0..87152dc 100644
+--- a/sim/js/loader.js
++++ b/sim/js/loader.js
+@@ -87,6 +87,24 @@ export async function loadCategory(name) {
+     return entry;
+ }
+ 
++// 字段在该数据源里到底有没有：用来区分「列不存在」与「列存在但值为空」。
++// 这两种空在界面上必须说不同的话——前者是接口缺口，后者是模型没算。
++// 必须缓存：read() 会被曲线按采样点调用（一次渲染上千点），每点都去扫
++// manifest 的几十列会把主线程吃光，实测三维回圈从 60fps 掉到 0.5fps。
++const fieldCache = new Map();
++export function hasField(entry, field) {
++    if (!entry) return false;
++    const k = entry.name + '.' + field;
++    let v = fieldCache.get(k);
++    if (v === undefined) {
++        v = entry.binary
++            ? !!bin.manifest && bin.manifest.columns.some(c => c.file === entry.name && c.field === field)
++            : !!entry.head && entry.head.includes(field);
++        fieldCache.set(k, v);
++    }
++    return v;
++}
++
+ export function getValue(entry, epoch, satId, field) {
+     if (!entry) return null;
+     if (entry.binary) {
+
+diff --git a/sim/js/panels.js b/sim/js/panels.js
+index a5f8091..a1be2c4 100644
+--- a/sim/js/panels.js
++++ b/sim/js/panels.js
+@@ -1,5 +1,5 @@
+-import { loadCategory, getValue, getStepSec, lastSecond } from './loader.js?v=32';
+-import { createChart } from './chart.js?v=32';
++import { loadCategory, getValue, getStepSec, lastSecond, hasField } from './loader.js?v=33';
++import { createChart } from './chart.js?v=33';
+ 
+ const $ = (id) => document.getElementById(id);
+ // 三星身份色：与三维轨迹线、图例、曲线图例同一套，跨视图不变（方案 §8.1）
+@@ -77,28 +77,39 @@ let hooks = {};
+ const key = (file, field) => `${file}.${field}`;
+ const isNotComputed = (file, field) => (cfg.display.notComputed || []).includes(key(file, field));
+ 
+-// ── 取值与四态：未接入 / 尚未计算 / 暂不可用 / 数据异常 ──
++// ── 取值与状态类别（V0.3 §12）─────────────────────────
++// kind 是结构化状态，界面文案与图表/导出层都按它分支，不靠中文文本猜。
++//   notConnected   数据源没接上
++//   notCalculated  列在，但模型没算（notComputed 名单）
++//   missingField   数据源里根本没有这一列 —— 属接口缺口，要回到生成侧补
++//   emptyValue     列在、也该有值，但该历元为空
++//   bad            有值但不是合法数字
++//   num / text     正常值
+ function read(file, field, sat, epoch, scale) {
+-    if (missing.has(file) || !entries[file]) return { kind: 'notConnected', text: '未接入' };
+-    if (isNotComputed(file, field)) return { kind: 'na', text: '尚未计算' };
+-    const raw = getValue(entries[file], epoch, sat, field);
+-    if (raw === null || raw === undefined || raw === '') return { kind: 'na', text: '暂不可用' };
++    const e = entries[file];
++    if (!e || missing.has(file)) return { kind: 'notConnected', text: '未接入' };
++    if (isNotComputed(file, field)) return { kind: 'notCalculated', text: '尚未计算' };
++    if (!hasField(e, field)) return { kind: 'missingField', text: '字段未提供' };
++    const raw = getValue(e, epoch, sat, field);
++    if (raw === null || raw === undefined || raw === '') return { kind: 'emptyValue', text: '暂无数据' };
+     if (/^-?\d+(\.\d+)?$/.test(raw)) {
+         const n = Number(raw) * (scale || 1);
+         return Number.isFinite(n) ? { kind: 'num', n, raw: Number(raw) } : { kind: 'bad', text: '数据异常' };
+     }
+     return { kind: 'text', text: raw };
+ }
++const isVoid = v => v.kind !== 'num' && v.kind !== 'text';
+ 
+ // 由若干列求和（用电功率 = 平台 + 载荷）；任一列缺值即整体不可得，不拿 0 顶
+ function sumOf(file, fields, sat, epoch) {
+-    let acc = 0, got = false;
++    let acc = 0, got = false, worst = null;
+     for (const f of fields) {
+         const v = read(file, f, sat, epoch, 1);
+-        if (v.kind !== 'num') continue;
+-        acc += v.n; got = true;
++        if (v.kind === 'num') { acc += v.n; got = true; }
++        else if (!worst || v.kind === 'missingField') worst = v;
+     }
+-    return got ? { kind: 'num', n: acc } : { kind: 'na', text: '暂不可用' };
++    if (got) return { kind: 'num', n: acc };
++    return worst || { kind: 'emptyValue', text: '暂无数据' };
+ }
+ 
+ function heroValue(h, sat, epoch) {
+@@ -112,9 +123,9 @@ function orbitAt(sat, epoch, field) {
+     const rows = hooks.orbitAt ? hooks.orbitAt(epoch) : null;
+     if (!rows) return { kind: 'notConnected', text: '未接入' };
+     const r = rows[sat - 1];
+-    if (!r) return { kind: 'na', text: '暂不可用' };
++    if (!r) return { kind: 'emptyValue', text: '暂无数据' };
+     const n = field === 'sma' ? r.a - 6378.137 : Math.hypot(r.Vx, r.Vy, r.Vz);
+-    return Number.isFinite(n) ? { kind: 'num', n } : { kind: 'na', text: '暂不可用' };
++    return Number.isFinite(n) ? { kind: 'num', n } : { kind: 'bad', text: '数据异常' };
+ }
+ 
+ function fmt(v) {
+@@ -122,6 +133,14 @@ function fmt(v) {
+     return v.toFixed(dp);
+ }
+ 
++// 图例里如实报出越限比例。越限是数据事实（自由漂移构型），不能靠放宽阈值掩盖。
++const outText = (series) => {
++    const r = series.map(x => x.outRatio).filter(v => typeof v === 'number');
++    if (!r.length) return '';
++    const m = Math.max(...r);
++    return m > 0 ? ` · 实测越限 ${(m * 100).toFixed(1)}% 采样点` : ' · 全程在带内';
++};
++
+ function cell(v) {
+     if (v.kind === 'num') return { text: fmt(v.n), cls: '' };
+     if (v.kind === 'text') return { text: v.text, cls: '' };
+@@ -204,6 +223,7 @@ export function setTab(tab) {
+     $('tabFormation').hidden = tab !== 'formation';
+     $('tabGround').hidden = tab !== 'ground';
+     $('tabSat').hidden = !satPane;
++    syncChartVisibility();
+     render(hooks.simSeconds ? hooks.simSeconds() : 0);
+ }
+ 
+@@ -284,42 +304,47 @@ function renderFormation(epoch, simSeconds) {
+         return v.kind === 'num' && v.raw === 1;
+     }).length;
+     $('formationHero').innerHTML = [
+-        ['三颗卫星', `${online} / ${sats.length} 可见`, online === sats.length ? 'ok' : ''],
+-        ['星间距离（平均）', avg === null ? '暂不可用' : avg.toFixed(1) + ' km', avg === null ? 'na' : ''],
+-        ['构型偏差', worst === null ? '暂不可用' : worst.toFixed(1) + ' m',
++        ['可见卫星', `${online} / ${sats.length}`, online === sats.length ? 'ok' : ''],
++        ['平均星间距', avg === null ? '暂无数据' : avg.toFixed(1) + ' km', avg === null ? 'na' : ''],
++        ['构型偏差', worst === null ? '暂无数据' : worst.toFixed(1) + ' m',
+             worst === null ? 'na' : (worst > d.edgeToleranceM ? 'bad' : 'ok')],
+-        ['当前时刻', 'T+' + hms(simSeconds), ''],
++        ['当前仿真时刻', 'T+' + hms(simSeconds), ''],
+     ].map(([k, v, cls]) => `<div class="cell"><div class="k">${k}</div>` +
+         `<div class="v ${cls || ''}" style="font-size:${String(v).length > 9 ? 16 : 24}px">${v}</div></div>`).join('');
+     $('kvFormationTag').textContent = worst === null ? '' : `允许 ±${d.edgeToleranceM} m`;
+ 
+     const rows = [
+-        ['光照状态', s => lightWord(read('sun_eclipse', 'shadow_state', s, epoch, 1))],
++        ['光照状态', s => { const v = read('sun_eclipse', 'shadow_state', s, epoch, 1);
++            return isVoid(v) ? v : { text: lightWord(v), kind: 'text' }; }],
+         ['电池 SOC', s => { const v = read('power', 'battery_soc_pct', s, epoch, 1);
+-                            return v.kind === 'num' ? v.n.toFixed(0) + ' %' : v.text; }],
++            return isVoid(v) ? v : { text: v.n.toFixed(0) + ' %', kind: 'num' }; }],
+         ['发电功率', s => { const v = read('power', 'gen_power', s, epoch, 1);
+-                            return v.kind === 'num' ? v.n.toFixed(0) + ' W' : v.text; }],
++            return isVoid(v) ? v : { text: v.n.toFixed(0) + ' W', kind: 'num' }; }],
+         ['用电功率', s => { const v = sumOf('power', ['platform_power', 'payload_power'], s, epoch);
+-                            return v.kind === 'num' ? v.n.toFixed(0) + ' W' : v.text; }],
++            return isVoid(v) ? v : { text: v.n.toFixed(0) + ' W', kind: 'num' }; }],
+         ['关键温度', s => { const v = read('thermal', 'temp_main', s, epoch, 1);
+-                            return v.kind === 'num' ? v.n.toFixed(1) + ' ℃' : v.text; }],
++            return isVoid(v) ? v : { text: v.n.toFixed(1) + ' ℃', kind: 'num' }; }],
+     ];
+-    // 星间距离是编队量，列在三颗星的格子里会重复三遍，单独一行放在对比表下方
+-    const edgeLine = EDGE_FIELDS.map(f => {
+-        const v = read('formation_geom', f, 1, epoch, 1000);
+-        return `${EDGE_LABEL[f]} ${v.kind === 'num' ? v.n.toFixed(2) : '—'}`;
+-    }).join(' · ');
+     const head = `<tr><th>指标</th>${sats.map(s =>
+         `<th style="--satc:${colorOf(s)}">TM0S${s}</th>`).join('')}</tr>`;
+     $('cmpBody').innerHTML = `<table>${head}` + rows.map(([name, fn]) => {
+         const cells = sats.map(s => fn(s));
+-        const na = cells.every(c => /未|暂|—/.test(c));
+-        const cls = na ? 'na' : (/不可见|本影|异常/.test(cells.join('')) ? 'bad' : '');
+-        return `<tr><td>${name}</td>${cells.map(c => `<td class="${cls}">${c}</td>`).join('')}</tr>`;
+-    }).join('') +
+-        `<tr><td>星间距离 km</td><td colspan="${sats.length}" style="text-align:left">${edgeLine}</td></tr>` +
+-        `</table>`;
+-    $('cmpSatNote').textContent = '无数据的项显示"未计算"，不以 0 代替';
++        const allVoid = cells.every(c => isVoid(c));
++        // 状态色只看结构化 kind。光照=本影 是正常读数，绝不能再按文本正则涂红。
++        const rowCls = allVoid ? 'na' : (cells.some(c => c.kind === 'bad') ? 'bad' : '');
++        return `<tr><td>${name}</td>${cells.map(c =>
++            `<td class="${rowCls || (isVoid(c) ? 'na' : '')}">${c.text}</td>`).join('')}</tr>`;
++    }).join('') + `</table>`;
++    $('cmpSatNote').textContent = '缺值按类别显示，不以 0 代替';
++
++    // 三组星间距离各占一行（V0.3 §6.1 组件4）；数据本身就是 km，不做无依据换算
++    const EDGE_NAME = { edge_12: 'TM0S1–TM0S2', edge_23: 'TM0S2–TM0S3', edge_31: 'TM0S3–TM0S1' };
++    $('edgeRows').innerHTML = `<table><tr><th>星间连线</th><th>距离 (km)</th></tr>` + EDGE_FIELDS.map(f => {
++        const v = read('formation_geom', f, 1, epoch, 1);
++        return `<tr><td>${EDGE_NAME[f]}</td><td class="${isVoid(v) ? 'na' : ''}">` +
++               `${isVoid(v) ? v.text : v.n.toFixed(3)}</td></tr>`;
++    }).join('') + `</table>`;
++    $('edgeNote').textContent = '来源 formation_geom，单位 km';
+ }
+ 
+ function renderMission(epoch, simSeconds) {
+@@ -386,23 +411,41 @@ function renderGround(epoch) {
+     host.innerHTML = `<table><tr><th>目标</th><th>方位角</th><th>仰角</th><th>斜距</th><th>状态</th></tr>${rows}</table>`;
+ }
+ 
+-// ── 趋势图 ──────────────────────────────────────────
++// ── 趋势图：每个标签有自己的图表容器，切标签只换内容不动相机/时间/选星 ──
++function mountChart(host, spec) {
++    host.innerHTML = `<div class="ch-hd"><h3>${spec.title}（${spec.unit}）</h3><span class="sub"></span></div>` +
++        `<canvas></canvas><div class="legend"></div>`;
++    const cv = host.querySelector('canvas');
++    cv.setAttribute('role', 'img');
++    cv.setAttribute('aria-label', `${spec.title} 趋势图`);
++    cv.addEventListener('charthover', e => showTip(e.detail, spec));
++    cv.addEventListener('chartleave', hideTip);
++    host._empty = false;
++    host.chart = createChart(cv, { onPick: sec => hooks.onSeek && hooks.onSeek(sec) });
++}
++
++// 空态要说清是哪一类空、缺在哪，不画伪曲线，也不留一张空图让人以为坏了
++function renderEmpty(host, spec) {
++    if (host._empty) return;
++    host._empty = true; host.chart = null;
++    host.innerHTML = `<div class="ch-hd"><h3>${spec.title}（${spec.unit}）</h3></div>` +
++        `<div class="empty"><b>本场景没有可画的${spec.title}曲线</b>` +
++        `<span>${spec.emptyReason || '所选时间窗内该字段没有有效值。'}</span></div>`;
++}
++
+ function buildCharts() {
+     for (const spec of cfg.charts) {
+         const host = $(spec.id);
+         if (!host) continue;
+-        if ((cfg.display.notComputed || []).some(k => spec.series.some(s => k === `${spec.file}.${s.field}`))) {
+-            host.hidden = true;      // 全为未计算量的图不画，避免把恒 0 线当成完美保持
+-            continue;
+-        }
+-        host.innerHTML = `<div class="ch-hd"><h3>${spec.title}</h3><span class="sub"></span></div>` +
+-            `<canvas></canvas><div class="legend"></div>`;
+-        const cv = host.querySelector('canvas');
+-        cv.setAttribute('role', 'img');
+-        cv.setAttribute('aria-label', `${spec.title} 趋势图`);
+-        cv.addEventListener('charthover', e => showTip(e.detail, spec));
+-        cv.addEventListener('chartleave', hideTip);
+-        charts[spec.id] = { spec, host, cv, chart: createChart(cv, { onPick: sec => hooks.onSeek && hooks.onSeek(sec) }) };
++        charts[spec.id] = { spec, host };
++    }
++    syncChartVisibility();
++}
++
++function syncChartVisibility() {
++    for (const { spec, host } of Object.values(charts)) {
++        host.hidden = spec.tab !== activeTab;
++        if (!host.hidden && !host.chart && !host._empty) mountChart(host, spec);
+     }
+ }
+ 
+@@ -410,13 +453,14 @@ function seriesFor(spec, epLo, epHi) {
+     const e = entries[spec.file];
+     if (!e) return [];
+     const stepSec = getStepSec();
+-    const stride = Math.max(1, Math.ceil((epHi - epLo) / 600));   // 1 秒数据抽到 ≤600 点，画得快也不糊
+-    // 三条边长按"组"上色而不是按星：一条边对应两颗星，用星色会误导
++    const stride = Math.max(1, Math.ceil((epHi - epLo) / 600));   // 只降采样画法，不动底层数据与导出
++    const sat = spec.perSat ? selectedSat : 1;
+     return spec.series.map((s, i) => {
+         const data = [];
+         for (let ep = epLo; ep <= epHi; ep += stride) {
+-            const v = read(spec.file, s.field, spec.perSat ? selectedSat : 1, ep, spec.scale);
+-            if (v.kind === 'num') data.push({ x: ep * stepSec, y: v.n });
++            const v = s.sum ? sumOf(spec.file, s.sum, sat, ep)
++                            : read(spec.file, s.field, sat, ep, spec.scale);
++            if (v.kind === 'num') data.push({ x: ep * stepSec, y: v.n + (spec.shift || 0) });
+         }
+         return { name: s.name, color: s.color || SERIES_COLORS[i % SERIES_COLORS.length], data };
+     });
+@@ -427,8 +471,11 @@ function renderCharts(simSeconds) {
+     const nEpoch = Math.max(...Object.values(entries).map(e => e.nEpoch || 1));
+     const epHi = Math.min(nEpoch - 1, Math.floor((simSeconds + 600) / stepSec));
+     const epLo = Math.max(0, Math.floor((simSeconds - 3600) / stepSec));
+-    for (const { spec, chart, host } of Object.values(charts)) {
++    for (const { spec, host } of Object.values(charts)) {
+         if (host.hidden) continue;
++        const series = seriesFor(spec, epLo, epHi);
++        if (!series.some(s => s.data.length)) { renderEmpty(host, spec); continue; }
++        if (!host.chart) mountChart(host, spec);
+         const d = cfg.display;
+         const opts = { cursor: simSeconds };
+         if (spec.bandFromNominal) {
+@@ -441,18 +488,20 @@ function renderCharts(simSeconds) {
+         } else if (spec.band) opts.band = { lo: spec.band[0], hi: spec.band[1] };
+         if (spec.plan != null) opts.plan = { y: spec.plan };
+         if (spec.gate && d.sunAltGate.enabled) opts.plan = { y: d.sunAltGate.thresholdDeg };
+-        chart.setData(seriesFor(spec, epLo, epHi), opts);
++        host.chart.setData(series, opts);
++        const ep = Math.floor(simSeconds / stepSec);
+         host.querySelector('.legend').innerHTML = spec.series.map((s, i) => {
+-            const v = read(spec.file, s.field, spec.perSat ? selectedSat : 1,
+-                Math.floor(simSeconds / stepSec), spec.scale);
++            const v = s.sum ? sumOf(spec.file, s.sum, spec.perSat ? selectedSat : 1, ep)
++                            : read(spec.file, s.field, spec.perSat ? selectedSat : 1, ep, spec.scale);
+             return `<span style="color:${s.color || SERIES_COLORS[i % SERIES_COLORS.length]}"><i></i>${s.name} ` +
+-                   `<b>${v.kind === 'num' ? fmt(v.n) : '—'}</b></span>`;
++                   `<b>${v.kind === 'num' ? fmt(v.n + (spec.shift || 0)) : '—'}</b></span>`;
+         }).join('') + [
+             opts.plan ? `<span style="color:var(--plan)"><i class="dash"></i>${spec.planLabel || '标称'} ${fmt(opts.plan.y)}</span>` : '',
+-            opts.band ? `<span style="color:var(--bad)"><i></i>${spec.bandLabel || `允许 ±${d.edgeToleranceM} m`}</span>` : '',
+-            spec.gate && !cfg.display.sunAltGate.enabled ? '<span style="color:var(--dim)">天黑门限（当前关闭）</span>' : '',
++            opts.band ? `<span style="color:var(--bad)"><i></i>${spec.bandLabel || `允许 ±${d.edgeToleranceM} m`}${outText(series)}</span>` : '',
++            spec.gate && !d.sunAltGate.enabled ? '<span style="color:var(--dim)">天黑门限（当前关闭）</span>' : '',
+         ].join('');
+         host.querySelector('.sub').textContent = '前 1 小时 · 点击定位';
++        if (spec.note) host.querySelector('.sub').title = spec.note;
+     }
+ }
+ 
+@@ -613,13 +662,14 @@ export function render(simSeconds) {
+             el.className = cls || '';
+         };
+         const vis = read('ground_obs', 'visible', sat, epoch, 1);
+-        put('st', vis.kind === 'num' ? (vis.raw === 1 ? '可见' : '不可见') : vis.text,
++        // visible 的真实语义是「仰角达标」，属于站心地平概念，就别写成含混的「可见」
++        put('st', vis.kind === 'num' ? (vis.raw === 1 ? '地平以上' : '地平以下') : vis.text,
+             vis.kind === 'num' ? (vis.raw === 1 ? 'st' : 'st na') : 'st na');
+         put('light', lightWord(read('sun_eclipse', 'shadow_state', sat, epoch, 1)));
+         const soc = read('power', 'battery_soc_pct', sat, epoch, 1);
+-        put('soc', soc.kind === 'num' ? soc.n.toFixed(0) + '%' : '未计算');
++        put('soc', soc.kind === 'num' ? soc.n.toFixed(0) + '%' : soc.text);
+         const tp = read('thermal', 'temp_main', sat, epoch, 1);
+-        put('temp', tp.kind === 'num' ? tp.n.toFixed(1) + '℃' : '未计算');
++        put('temp', tp.kind === 'num' ? tp.n.toFixed(1) + '℃' : tp.text);
+         const el = read('ground_obs', 'el', sat, epoch, 1);
+         const rg = read('ground_obs', 'range', sat, epoch, 1);
+         put('el', el.kind === 'num' ? el.n.toFixed(1) : '—');
